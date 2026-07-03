@@ -129,10 +129,28 @@ for i, arm in ARMS.items():
           f"reach_err={np.linalg.norm(E-attach)-RE:+.1f}mm")
 
 # plate translation
-dP = Gf.Vec3d(*(TARGET - HOME_PLATE).tolist())
-for name in ("MovingPlate", "RevoluteLinkPlate"):
-    set_xform(stage, name, Gf.Matrix4d().SetTranslate(dP))
+set_xform(stage, "MovingPlate", Gf.Matrix4d().SetTranslate(
+    Gf.Vec3d(*(TARGET - HOME_PLATE).tolist())))
 print(f"  plate -> ({TARGET[0]:.0f},{TARGET[1]:.0f},{TARGET[2]:.0f})")
+
+# central 4th-axis telescoping shaft: tilt to point at the plate and slide each
+# section along the (now shorter) axis to fake the telescope. Base joint fixed.
+P_TOP = np.array([0.0, 0.0, -148.0])       # shaft pivot at the base
+P_BOT_HOME = np.array([0.0, 0.0, -1178.0])  # plate-side joint at home
+rshaft = Gf.Rotation()
+rshaft.SetRotateInto(Gf.Vec3d(*(P_BOT_HOME - P_TOP).tolist()),
+                     Gf.Vec3d(*(TARGET - P_TOP).tolist()))
+Rm_shaft = Gf.Matrix4d().SetRotate(rshaft)
+CENTRAL = {"RevoluteLinkUpper": -577.0, "RevoluteLinkLower": -745.0,
+           "RevoluteLinkPlate": -1178.0}
+for name, z_home in CENTRAL.items():
+    t = (z_home - P_TOP[2]) / (P_BOT_HOME[2] - P_TOP[2])   # 0=base .. 1=plate
+    Chome = np.array([0.0, 0.0, z_home])
+    Cnew = P_TOP + t * (TARGET - P_TOP)
+    M = Gf.Matrix4d().SetTranslate(Gf.Vec3d(*(-Chome).tolist())) * Rm_shaft \
+        * Gf.Matrix4d().SetTranslate(Gf.Vec3d(*Cnew.tolist()))
+    set_xform(stage, name, M)
+print("  central 4th-axis shaft: tilted + telescoped to the plate")
 
 # lights + render -----------------------------------------------------------
 UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
