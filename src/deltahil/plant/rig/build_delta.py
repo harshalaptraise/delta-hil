@@ -82,10 +82,12 @@ def build_delta(
     art.CreateSolverPositionIterationCountAttr(SOLVER_POSITION_ITERATIONS)
     art.CreateSolverVelocityIterationCountAttr(SOLVER_VELOCITY_ITERATIONS)
 
-    # fixed base body (grounded to the world)
+    # fixed base body (grounded to the world). The fixed joint needs a body to
+    # ground: body1=base, body0 empty => world. (No bodies => PhysX rejects it.)
     base = _rigid_box(stage, f"{root_path}/base", size=0.06,
                       pos=Gf.Vec3f(0, 0, 0), UsdPhysics=UsdPhysics, UsdGeom=UsdGeom)
-    UsdPhysics.FixedJoint.Define(stage, f"{root_path}/base/ground")
+    ground = UsdPhysics.FixedJoint.Define(stage, f"{root_path}/base/ground")
+    ground.CreateBody1Rel().SetTargets([f"{root_path}/base"])
 
     # moving platform (pure translation), hangs one forearm below the base
     plat_z = -math.sqrt(max(re * re - (base_r - plat_r) ** 2, 0.0)) - rf
@@ -94,10 +96,12 @@ def build_delta(
                           UsdPhysics=UsdPhysics, UsdGeom=UsdGeom)
     # the TCP frame the controller commands and IsaacPlant reads back
     UsdGeom.Xform.Define(stage, f"{root_path}/platform/tcp")
-    # gripper body carried by the platform (holds the contact geometry)
-    _rigid_box(stage, f"{root_path}/platform/gripper", size=0.03,
-               pos=Gf.Vec3f(0, 0, plat_z - 0.02),
-               UsdPhysics=UsdPhysics, UsdGeom=UsdGeom)
+    # gripper contact geometry: a COLLISION-ONLY child of the platform (a nested
+    # RigidBodyAPI is illegal -- PhysX forbids a rigid body inside a rigid body).
+    grip = UsdGeom.Cube.Define(stage, f"{root_path}/platform/gripper")
+    grip.CreateSizeAttr(0.03)
+    grip.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.02))
+    UsdPhysics.CollisionAPI.Apply(grip.GetPrim())
 
     for i, deg in enumerate(_ARM_ANGLE_DEG):
         _build_arm(

@@ -124,7 +124,7 @@ class IsaacPlant:
         grip_confirm_steps: int = 3,
         ee_prim: str = "/World/Delta/platform/tcp",
         part_prim: str = "/World/Part",
-        gripper_prim: str = "/World/Delta/platform/gripper",
+        gripper_prim: str = "/World/Delta/platform",
         articulation_prim: str = "/World/Delta",
         motor_dofs: tuple[str, str, str] = ("motor_0", "motor_1", "motor_2"),
     ):
@@ -180,7 +180,11 @@ class IsaacPlant:
         self._part = api["RigidPrim"](self._part_path)
         self._gripper = api["RigidPrim"](self._gripper_path)
 
-        self._world.reset()  # initialises physics handles (DOF indices, views)
+        self._world.reset()  # plays the timeline; physics handles come alive
+        # A standalone Articulation initialises on the first physics play; make it
+        # explicit so get_dof_index below has a live DOF view.
+        if hasattr(self._art, "initialize"):
+            self._art.initialize()
         self._motor_idx = [self._art.get_dof_index(n) for n in self._motor_dofs]
 
         # optional contact sensor on the gripper, filtered to the part (P3).
