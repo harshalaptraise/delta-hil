@@ -34,8 +34,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
-
 from ..delta_ik import DEFAULT_DELTA_GEOM, DeltaGeom
 
 # solver iterations for the closed-loop articulation root (default is 4 -- far
@@ -124,11 +122,12 @@ def _build_arm(stage, root_path, i, deg, base_r, plat_r, rf, re, plat_z,
 
     arm_axis = Gf.Vec3f(-sa, ca, 0.0)  # motor rotates in this arm's vertical plane
 
+    # midpoints via native Gf arithmetic (numpy float32 doesn't bind to Gf.Vec3f)
     upper = _rigid_box(stage, f"{root_path}/upper_{i}", size=0.03,
-                       pos=Gf.Vec3f(*((np.asarray(hinge) + np.asarray(elbow)) / 2)),
+                       pos=(hinge + elbow) * 0.5,
                        UsdPhysics=UsdPhysics, UsdGeom=UsdGeom)
     forearm = _rigid_box(stage, f"{root_path}/forearm_{i}", size=0.025,
-                         pos=Gf.Vec3f(*((np.asarray(elbow) + np.asarray(attach)) / 2)),
+                         pos=(elbow + attach) * 0.5,
                          UsdPhysics=UsdPhysics, UsdGeom=UsdGeom)
 
     # 1) MOTOR: actuated revolute, base -> upper arm. This is DOF "motor_i".
