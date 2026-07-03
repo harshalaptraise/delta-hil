@@ -75,7 +75,7 @@ def _boot_isaac(headless: bool):
 
     # Safe now: the runtime is up, so the extension modules are importable.
     from isaacsim.core.api import World
-    from isaacsim.core.utils.stage import add_reference_to_stage
+    from isaacsim.core.utils.stage import add_reference_to_stage, get_current_stage
     try:  # Isaac 4.5/5.x single-object wrappers
         from isaacsim.core.prims import (
             SingleArticulation as Articulation,
@@ -91,6 +91,7 @@ def _boot_isaac(headless: bool):
         "RigidPrim": RigidPrim,
         "XFormPrim": XFormPrim,
         "add_reference_to_stage": add_reference_to_stage,
+        "get_current_stage": get_current_stage,
     }
     _SIM_APP, _SIM_SYMBOLS = simulation_app, symbols
     return simulation_app, symbols
@@ -113,7 +114,7 @@ def _confirm_grasp(grip_cmd: bool, force_N: float, part_tracks_tcp: bool,
 class IsaacPlant:
     def __init__(
         self,
-        usd_stage: str,
+        usd_stage: str | None = None,
         *,
         headless: bool = True,
         geom: DeltaGeom = DEFAULT_DELTA_GEOM,
@@ -161,9 +162,19 @@ class IsaacPlant:
         )
         self._render = not headless
 
-        # Load the rigged Delta USD (asset with exclude-flags + guide joints +
-        # solver counts already authored; or produced by rig/build_delta.py).
-        api["add_reference_to_stage"](usd_path=usd_stage, prim_path=self._art_path)
+        # Get the Delta onto the live stage. Two modes:
+        #  - procedural (usd_stage falsy or "procedural"): author the rigged Delta
+        #    directly onto this stage via build_delta -- no file, no reference, so
+        #    no defaultPrim/composition to get wrong.
+        #  - asset path: reference a prepared Delta USD (must carry a defaultPrim).
+        stage = api["get_current_stage"]()
+        if not usd_stage or usd_stage == "procedural":
+            from .rig.build_delta import build_delta
+            build_delta(stage, self.geom,
+                        root_path=self._art_path, part_path=self._part_path)
+        else:
+            api["add_reference_to_stage"](usd_path=usd_stage, prim_path=self._art_path)
+
         self._art = api["Articulation"](self._art_path)
         self._ee = api["XFormPrim"](self._ee_path)
         self._part = api["RigidPrim"](self._part_path)

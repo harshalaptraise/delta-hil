@@ -203,7 +203,10 @@ def main(out_path: str = "delta.usd", geom: DeltaGeom = DEFAULT_DELTA_GEOM) -> s
     stage = Usd.Stage.CreateNew(out_path)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
-    build_delta(stage, geom)
+    root = build_delta(stage, geom)
+    # defaultPrim so the file is referenceable (IsaacPlant's asset path); the
+    # procedural path builds onto the live stage and never needs this.
+    stage.SetDefaultPrim(stage.GetPrimAtPath("/World"))
     stage.GetRootLayer().Save()
     print(f"wrote {out_path}  (geom f={geom.f} e={geom.e} rf={geom.rf} re={geom.re} mm)")
     return out_path

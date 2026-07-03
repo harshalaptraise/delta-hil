@@ -14,21 +14,8 @@ if os.environ.get("DELTAHIL_ISAAC") != "1":
 
 
 @pytest.fixture(scope="session")
-def delta_usd(tmp_path_factory):
-    """Path to a rigged Delta USD: use $DELTAHIL_DELTA_USD if set, else build one."""
-    env = os.environ.get("DELTAHIL_DELTA_USD")
-    if env:
-        return env
-    # Boot Kit first: pxr (USD) and isaacsim.core only exist once SimulationApp
-    # is up. The IsaacPlant the test then creates reuses this same app (singleton).
-    from deltahil.plant.isaac_plant import _boot_isaac
-    _boot_isaac(headless=True)
-    from pxr import Usd, UsdGeom
-    from deltahil.plant.rig.build_delta import build_delta
-    out = str(tmp_path_factory.mktemp("rig") / "delta.usd")
-    stage = Usd.Stage.CreateNew(out)
-    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
-    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
-    build_delta(stage)
-    stage.GetRootLayer().Save()
-    return out
+def delta_usd():
+    """Delta source for IsaacPlant: a rigged USD asset path if $DELTAHIL_DELTA_USD
+    is set, else None -> IsaacPlant builds the Delta procedurally onto its own
+    live stage (no file, no reference composition)."""
+    return os.environ.get("DELTAHIL_DELTA_USD")
