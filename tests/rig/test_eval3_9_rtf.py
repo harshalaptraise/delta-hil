@@ -9,7 +9,12 @@ import os
 
 import pytest
 
-pytestmark = pytest.mark.rig
+# Articulation (P4) path deferred -- see test_eval1_ik_error / kinematic_delta.
+# RTF/FPS (evals 3/9) are exercised on the kinematic Delta instead for now.
+pytestmark = [
+    pytest.mark.rig,
+    pytest.mark.skip(reason="P4 articulation path deferred; RTF covered by kinematic loop"),
+]
 
 from deltahil.bridge import Bridge
 from deltahil.plant.isaac_plant import IsaacPlant

@@ -15,7 +15,15 @@ import os
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.rig
+# The full closed-chain PhysX articulation (P4) is deferred: no pre-rigged IRB 360
+# asset exists and the procedural loop rig hits PhysX's no-closed-loop limit
+# (motor DOFs get dropped when it auto-excludes joints). The kinematic Delta
+# (tests/rig/test_kinematic_loop.py) is the active path. Re-enable this when the
+# real IRB 360 is rigged per Isaac's "Rig Closed-Loop Structures".
+pytestmark = [
+    pytest.mark.rig,
+    pytest.mark.skip(reason="P4 articulation path deferred; see kinematic_delta.py"),
+]
 
 from deltahil.plant.delta_ik import DEFAULT_DELTA_GEOM, Unreachable, fk
 from deltahil.plant.isaac_plant import IsaacPlant
