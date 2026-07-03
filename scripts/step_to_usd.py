@@ -80,11 +80,10 @@ results = {}
 async def _convert(inp: str, outp: str):
     if os.path.exists(outp):
         os.remove(outp)
+    # HoopsCoreConverter.create_converter_task(src, out, file_format_args: Dict[str,str])
+    # empty dict = default options (tessLOD=2). Bump quality later with {"tessLOD":"4"}.
     try:
-        res = await converter.create_converter_task(inp, outp, [])
-    except TypeError:
-        # some builds take no options arg
-        res = await converter.create_converter_task(inp, outp)
+        res = await converter.create_converter_task(inp, outp, {})
     except Exception as exc:
         results[inp] = f"EXC: {type(exc).__name__}: {exc}"
         return
