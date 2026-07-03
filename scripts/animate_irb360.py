@@ -152,19 +152,39 @@ rp = rep.create.render_product(cam, (900, 600))
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
 
+from PIL import Image  # noqa: E402
+
+# warm up the render graph so the first get_data() returns a real frame
+for _ in range(12):
+    rep.orchestrator.step(rt_subframes=8)
+
+
+def capture():
+    for _ in range(6):
+        rep.orchestrator.step(rt_subframes=8)
+        a = np.asarray(rgb.get_data())
+        if a.ndim == 3 and a.size and a.shape[2] >= 3:
+            return a[:, :, :3].astype("uint8")
+    return None
+
+
 frames = trajectory()
 print(f"[animate] rendering {len(frames)} frames ...")
 imgs = []
-from PIL import Image  # noqa: E402
 for idx, T in enumerate(frames):
     pose(stage, T)
-    rep.orchestrator.step(rt_subframes=8)
-    arr = np.asarray(rgb.get_data())[:, :, :3].astype("uint8")
+    arr = capture()
+    if arr is None:
+        print(f"  frame {idx+1} skipped (no data)")
+        continue
     imgs.append(Image.fromarray(arr))
     if idx % 6 == 0:
         print(f"  frame {idx+1}/{len(frames)}  plate=({T[0]:.0f},{T[1]:.0f},{T[2]:.0f})")
 
-imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=80, loop=0)
-print(f"\n[animate] wrote {OUT_GIF}  exists={os.path.exists(OUT_GIF)}  frames={len(imgs)}\n")
+if imgs:
+    imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=80, loop=0)
+    print(f"\n[animate] wrote {OUT_GIF}  exists={os.path.exists(OUT_GIF)}  frames={len(imgs)}\n")
+else:
+    print("\n[animate] no frames captured\n")
 
 app.close()
