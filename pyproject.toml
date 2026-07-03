@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "delta-hil"
+version = "0.1.0"
+description = "Hardware-in-the-loop pick-and-place simulator: ABB Delta on Isaac Sim, Allen-Bradley ControlLogix L8x, two-tier I/O, honest calibration."
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+isaac = []            # Isaac Sim runtime is installed out-of-band (see plant/isaac_plant.py)
+logix = ["pycomm3>=1.2", "asyncua>=1.0"]   # real L8x: EtherNet/IP fast tier + OPC UA slow tier
+dev = ["pytest>=7"]
+
+[project.scripts]
+deltahil-demo = "deltahil.run:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "rig: needs the Isaac Sim runtime + an RTX GPU (set DELTAHIL_ISAAC=1); skipped in headless CI",
+]
