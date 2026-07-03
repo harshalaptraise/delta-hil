@@ -177,6 +177,9 @@ def main(out_path: str = "delta.usd", geom: DeltaGeom = DEFAULT_DELTA_GEOM) -> s
 
     Then point IsaacPlant at it: ``IsaacPlant(usd_stage="delta.usd")``.
     """
+    # Boot Kit first so pxr (USD) is importable (it ships with the runtime).
+    from deltahil.plant.isaac_plant import _boot_isaac
+    _boot_isaac(headless=True)
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateNew(out_path)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)

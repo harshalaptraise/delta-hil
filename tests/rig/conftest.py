@@ -19,6 +19,10 @@ def delta_usd(tmp_path_factory):
     env = os.environ.get("DELTAHIL_DELTA_USD")
     if env:
         return env
+    # Boot Kit first: pxr (USD) and isaacsim.core only exist once SimulationApp
+    # is up. The IsaacPlant the test then creates reuses this same app (singleton).
+    from deltahil.plant.isaac_plant import _boot_isaac
+    _boot_isaac(headless=True)
     from pxr import Usd, UsdGeom
     from deltahil.plant.rig.build_delta import build_delta
     out = str(tmp_path_factory.mktemp("rig") / "delta.usd")

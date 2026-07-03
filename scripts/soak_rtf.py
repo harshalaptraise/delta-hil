@@ -21,7 +21,10 @@ def main(seconds: float = 60.0, usd: str | None = None) -> int:
     from deltahil.plc.mock_plc import MockPLC
 
     if usd is None:
-        # build a throwaway rigged Delta from geometry (needs the Isaac runtime)
+        # build a throwaway rigged Delta from geometry (needs the Isaac runtime).
+        # Boot Kit first so pxr is importable; IsaacPlant below reuses the app.
+        from deltahil.plant.isaac_plant import _boot_isaac
+        _boot_isaac(headless=True)
         from pxr import Usd, UsdGeom
         from deltahil.plant.rig.build_delta import build_delta
         usd = "delta_soak.usd"
