@@ -79,12 +79,22 @@ def m_rot_map(pivot, v_from, v_to):
         * Gf.Matrix4d().SetTranslate(P)
 
 
-def m_seg_map(p0_from, p1_from, p0_to, p1_to):
-    r = Gf.Rotation()
-    r.SetRotateInto(Gf.Vec3d(*(p1_from - p0_from).tolist()),
-                    Gf.Vec3d(*(p1_to - p0_to).tolist()))
-    return Gf.Matrix4d().SetTranslate(Gf.Vec3d(*(-p0_from).tolist())) \
-        * Gf.Matrix4d().SetRotate(r) \
+def _frame(d, w):
+    """Orthonormal frame (rows) from a primary direction d and a width hint w."""
+    d = d / np.linalg.norm(d)
+    w = w - (w @ d) * d
+    w = w / np.linalg.norm(w)
+    u = np.cross(d, w)
+    return np.array([d, w, u])
+
+
+def m_frame_map(p0_from, p1_from, p0_to, p1_to, width):
+    """Rigid transform mapping segment (p0_from->p1_from) onto (p0_to->p1_to)
+    while preserving the `width` axis -- so the forearm parallelogram doesn't roll
+    about its own length when it swings out of the arm's plane."""
+    R = _frame(p1_from - p0_from, width).T @ _frame(p1_to - p0_to, width)
+    Rm = Gf.Matrix4d(Gf.Matrix3d(*R.flatten().tolist()), Gf.Vec3d(0, 0, 0))
+    return Gf.Matrix4d().SetTranslate(Gf.Vec3d(*(-p0_from).tolist())) * Rm \
         * Gf.Matrix4d().SetTranslate(Gf.Vec3d(*p0_to.tolist()))
 
 
@@ -106,12 +116,13 @@ for i, arm in ARMS.items():
     phi = arm["phi"]
     u_r = rotz(np.array([1.0, 0, 0]), phi)
     P = np.array([R_MOTOR * u_r[0], R_MOTOR * u_r[1], Z_MOTOR])
+    A = np.array([-math.sin(math.radians(phi)), math.cos(math.radians(phi)), 0.0])
     home_E = rotz(HOME_E1, phi)
     home_attach = rotz(HOME_ATTACH1, phi)
     attach = TARGET + rotz(ATTACH_OFF1, phi)
     E = solve_elbow(P, u_r, attach, home_E)
     set_xform(stage, arm["ua"], m_rot_map(P, home_E - P, E - P))       # upper arm
-    Mf = m_seg_map(home_E, home_attach, E, attach)                     # forearm
+    Mf = m_frame_map(home_E, home_attach, E, attach, A)                # forearm
     for la in arm["la"]:
         set_xform(stage, la, Mf)
     print(f"  arm {i}: E=({E[0]:.0f},{E[1]:.0f},{E[2]:.0f}) "
