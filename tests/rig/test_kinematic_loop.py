@@ -27,9 +27,10 @@ def test_kinematic_loop_closes_in_realtime():
     scans = bridge.run(max_scans=400, until=lambda: plc.done)
     sensors = plant.read_sensors()
     s = plant.rtf_summary()
+    part = tuple(round(v, 2) for v in plant.true_part_xyz())
     print(f"\nkin: closed={plc.done} in {scans} scans  "
           f"grip_confirm={sensors['sensor.grip_confirm']}  "
-          f"tcp={tuple(round(v,2) for v in sensors['sensor.tcp_xyz'])}  "
+          f"tcp={tuple(round(v,2) for v in sensors['sensor.tcp_xyz'])}  part={part}  "
           f"rtf={s['rtf']:.3f} fps={s['fps']:.1f}")
     assert plc.done, "loop did not close (grip never confirmed)"
     assert s["rtf"] >= 1.0, f"eval 3 FAIL: RTF {s['rtf']:.3f} < 1.0"

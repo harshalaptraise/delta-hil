@@ -94,18 +94,16 @@ class KinematicDeltaPlant:
         # the TCP frame the controller reads back (child transform of platform)
         UsdGeom.Xform.Define(stage, self._tcp_path)
 
-        # part: a dynamic rigid body with contact reporting (P3)
+        # part: a KINEMATIC body placed by set_part. Kinematic means it never
+        # free-falls under gravity and a kinematic platform can't shove it on
+        # arrival -- so the proximity grasp gate catches a clean coincidence.
+        # (A dynamic part + real PhysX contact is the 2b upgrade.)
         part = UsdGeom.Cube.Define(stage, self._part_path)
         part.CreateSizeAttr(0.02)
         part.AddTranslateOp().Set(Gf.Vec3d(*(float(v) for v in home_m)))
         UsdPhysics.CollisionAPI.Apply(part.GetPrim())
-        UsdPhysics.RigidBodyAPI.Apply(part.GetPrim())
-        UsdPhysics.MassAPI.Apply(part.GetPrim())
-        PhysxSchema.PhysxContactReportAPI.Apply(part.GetPrim())
-        # the part sits held on a surface/conveyor until picked -- no free-fall
-        # under gravity in this loop test (a real conveyor surface comes later).
-        prb = PhysxSchema.PhysxRigidBodyAPI.Apply(part.GetPrim())
-        prb.CreateDisableGravityAttr(True)
+        prb = UsdPhysics.RigidBodyAPI.Apply(part.GetPrim())
+        prb.CreateKinematicEnabledAttr(True)
 
         self._plat = api["RigidPrim"](self._plat_path)
         self._tcp = api["XFormPrim"](self._tcp_path)
@@ -137,6 +135,8 @@ class KinematicDeltaPlant:
         # place the platform (and its TCP) at the commanded pose -- the analytic
         # Delta reaches its target exactly, so TCP == target (P4 deferred).
         self._plat.set_world_pose(position=self._target_mm * _MM)
+        if self._grip_confirm:                       # once grasped, carry the part
+            self._part.set_world_pose(position=self._target_mm * _MM)
         n = max(1, round(dt / self.physics_dt))
         for _ in range(n):
             self._world.step(render=self._render)
@@ -151,8 +151,13 @@ class KinematicDeltaPlant:
             "sensor.tcp_xyz": tuple(np.asarray(pos_m, float) / _MM),
         }
 
-    # -- grasp: contact-gated attach (P3) ------------------------------------
+    # -- grasp: proximity-gated pick (P3, v1) --------------------------------
     def _update_grasp(self) -> None:
+        # v1 gate: the gripper must actually reach the part (pose coincidence)
+        # while grip is commanded and a part is present -- the P3 conjuncts,
+        # with a proximity stand-in for contact force. Once confirmed, step()
+        # carries the (kinematic) part with the platform. Real contact-force
+        # gating is the 2b upgrade.
         if self._grip_confirm:
             return
         plat_p, _ = self._plat.get_world_pose()
@@ -163,20 +168,7 @@ class KinematicDeltaPlant:
             self._grip and self._part_present, 1.0 if at_part else 0.0, at_part,
             0.5, self._held_steps, self.grip_confirm_steps,
         )
-        if confirmed and not self._attached:
-            self._attach_part()
         self._grip_confirm = confirmed
-
-    def _attach_part(self) -> None:
-        # weld the part to the kinematic platform so it is carried (a suction
-        # pick). The gate above required the gripper to actually reach it.
-        from pxr import UsdPhysics
-        stage = self._api["get_current_stage"]()
-        path = self._plat_path + "/grasp_weld"
-        joint = UsdPhysics.FixedJoint.Define(stage, path)
-        joint.CreateBody0Rel().SetTargets([self._plat_path])
-        joint.CreateBody1Rel().SetTargets([self._part_path])
-        self._attached = True
 
     # -- metering (evals 3/9) + lifecycle ------------------------------------
     def rtf_summary(self) -> dict:
