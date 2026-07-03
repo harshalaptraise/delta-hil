@@ -154,8 +154,28 @@ def _build_arm(stage, root_path, i, deg, base_r, plat_r, rf, re, plat_z,
     loop = UsdPhysics.SphericalJoint.Define(stage, f"{root_path}/forearm_{i}/loop_{i}")
     loop.CreateBody0Rel().SetTargets([f"{root_path}/forearm_{i}"])
     loop.CreateBody1Rel().SetTargets([f"{root_path}/platform"])
-    lp = PhysxSchema.PhysxJointAPI.Apply(loop.GetPrim())
-    lp.CreateExcludeFromArticulationAttr(True)
+    _exclude_from_articulation(loop.GetPrim(), PhysxSchema=PhysxSchema)
+
+
+def _exclude_from_articulation(prim, *, PhysxSchema):
+    """Mark a joint as loop-closing (excluded from the articulation tree).
+
+    The schema method that sets this varies across PhysX versions (107.3 on this
+    rig has no ``CreateExcludeFromArticulationAttr`` on PhysxJointAPI). Try the
+    schema method, then fall back to authoring the raw USD attribute. Best-effort
+    by design: modern omni.physx also auto-detects loop joints, so a miss here
+    degrades to the parser handling it (with a warning), not a crash.
+    """
+    from pxr import Sdf
+    api = PhysxSchema.PhysxJointAPI.Apply(prim)
+    if hasattr(api, "CreateExcludeFromArticulationAttr"):
+        api.CreateExcludeFromArticulationAttr(True)
+        return
+    # raw-attribute fallback: the PhysxJointAPI attribute is namespaced physxJoint:
+    attr = prim.CreateAttribute(
+        "physxJoint:excludeFromArticulation", Sdf.ValueTypeNames.Bool
+    )
+    attr.Set(True)
 
 
 def _rigid_box(stage, path, *, size, pos, UsdPhysics, UsdGeom):
