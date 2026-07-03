@@ -39,42 +39,61 @@ from .meters import RTFMeter
 
 _MM = 0.001  # mm -> m
 
+# Kit allows exactly one SimulationApp per process. Cache it so a second
+# IsaacPlant (e.g. two rig tests in one pytest process) reuses the running app
+# instead of crashing. The first boot's headless setting wins.
+_SIM_APP = None
+_SIM_SYMBOLS = None
 
-def _require_isaac():
-    """Import the Isaac Sim runtime lazily and return the handful of symbols the
-    plant needs. Raises a clear RuntimeError (not ImportError) if the runtime is
-    absent, so callers on the laptop get the same "needs the rig" message the
-    original stub gave. Targets the Isaac 4.5+ ``isaacsim.core`` namespace and
-    falls back to the deprecated ``omni.isaac.core`` for older installs.
+
+def _boot_isaac(headless: bool):
+    """Boot the Isaac Sim runtime and return ``(simulation_app, symbols)``.
+
+    Isaac's Kit/Carbonite runtime has a hard ordering requirement: ``SimulationApp``
+    must be instantiated *before* any ``isaacsim.core.*`` (or ``omni.*``) import --
+    those extension modules do not exist until the app boots them. So we import and
+    construct ``SimulationApp`` first, and only then import World/prims/stage utils.
+
+    Raises a clear RuntimeError (not ImportError) if Isaac is absent, so callers on
+    the laptop get the "needs the rig" message and ``pytest`` stays green.
     """
+    global _SIM_APP, _SIM_SYMBOLS
+    if _SIM_APP is not None:  # already booted in this process -- reuse it
+        return _SIM_APP, _SIM_SYMBOLS
+
     try:
-        try:  # Isaac Sim 4.5+ (current)
-            from isaacsim.core.api import World
-            from isaacsim.core.prims import (
-                SingleArticulation as Articulation,
-                SingleRigidPrim as RigidPrim,
-                SingleXFormPrim as XFormPrim,
-            )
-            from isaacsim.core.utils.stage import add_reference_to_stage
-        except ImportError:  # Isaac Sim <= 4.2 (deprecated namespace)
-            from omni.isaac.core import World
-            from omni.isaac.core.articulations import Articulation
-            from omni.isaac.core.prims import RigidPrim, XFormPrim
-            from omni.isaac.core.utils.stage import add_reference_to_stage
+        from isaacsim import SimulationApp
     except ImportError as exc:  # no Isaac at all -- the laptop path
         raise RuntimeError(
-            "IsaacPlant requires the Isaac Sim runtime (its own Python 3.10 "
-            "environment on an RTX-class GPU). Install the [isaac] extra "
-            "out-of-band and run on the rig. The headless MockPlant runs the "
-            "full loop and eval 10 without it -- see this module's docstring."
+            "IsaacPlant requires the Isaac Sim runtime (a Python 3.11 env with "
+            "the isaacsim pip package on an RTX GPU). The headless MockPlant runs "
+            "the full loop and eval 10 without it -- see this module's docstring."
         ) from exc
-    return {
+
+    # Booting Kit takes ~30-60 s the first time (extensions + shader warmup).
+    simulation_app = SimulationApp({"headless": headless})
+
+    # Safe now: the runtime is up, so the extension modules are importable.
+    from isaacsim.core.api import World
+    from isaacsim.core.utils.stage import add_reference_to_stage
+    try:  # Isaac 4.5/5.x single-object wrappers
+        from isaacsim.core.prims import (
+            SingleArticulation as Articulation,
+            SingleRigidPrim as RigidPrim,
+            SingleXFormPrim as XFormPrim,
+        )
+    except ImportError:  # older layout without the Single* prefix
+        from isaacsim.core.prims import Articulation, RigidPrim, XFormPrim
+
+    symbols = {
         "World": World,
         "Articulation": Articulation,
         "RigidPrim": RigidPrim,
         "XFormPrim": XFormPrim,
         "add_reference_to_stage": add_reference_to_stage,
     }
+    _SIM_APP, _SIM_SYMBOLS = simulation_app, symbols
+    return simulation_app, symbols
 
 
 def _confirm_grasp(grip_cmd: bool, force_N: float, part_tracks_tcp: bool,
@@ -130,7 +149,9 @@ class IsaacPlant:
         self._held_steps = 0
         self._rtf = RTFMeter()
 
-        api = _require_isaac()  # <-- only here does Isaac load; raises on laptop
+        # Boot Kit first (SimulationApp), THEN import core modules -- see
+        # _boot_isaac. Raises RuntimeError on the laptop (no isaacsim installed).
+        self._sim_app, api = _boot_isaac(headless)
         self._api = api
 
         # World owns the PhysX scene + stepping cadence. render off in headless
@@ -274,3 +295,21 @@ class IsaacPlant:
     # -- metering (evals 3/9) -----------------------------------------------
     def rtf_summary(self) -> dict:
         return self._rtf.summary()
+
+    # -- lifecycle -----------------------------------------------------------
+    def close(self) -> None:
+        """Shut down the Kit runtime. Call at the end of a rig session; leaving
+        SimulationApp running holds the GPU and blocks a clean process exit."""
+        global _SIM_APP, _SIM_SYMBOLS
+        app = getattr(self, "_sim_app", None)
+        if app is not None:
+            app.close()
+            self._sim_app = None
+            _SIM_APP, _SIM_SYMBOLS = None, None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False

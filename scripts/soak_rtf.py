@@ -32,16 +32,19 @@ def main(seconds: float = 60.0, usd: str | None = None) -> int:
         stage.GetRootLayer().Save()
 
     plant = IsaacPlant(usd, headless=True, grasp_mode="contact")
-    plc = MockPLC()
-    plc.set_target_from_vision((0.0, 0.0, plant.read_sensors()["sensor.tcp_xyz"][2]))
-    bridge = Bridge(plc, plant)
+    try:
+        plc = MockPLC()
+        plc.set_target_from_vision((0.0, 0.0, plant.read_sensors()["sensor.tcp_xyz"][2]))
+        bridge = Bridge(plc, plant)
 
-    n = int(round(seconds / bridge.dt))
-    print(f"soaking {seconds:.0f} s ({n} scans at dt={bridge.dt}) ...")
-    bridge.run(max_scans=n)
+        n = int(round(seconds / bridge.dt))
+        print(f"soaking {seconds:.0f} s ({n} scans at dt={bridge.dt}) ...")
+        bridge.run(max_scans=n)
 
-    s = plant.rtf_summary()
-    lat = bridge.fast_meter.summary_ms()
+        s = plant.rtf_summary()
+        lat = bridge.fast_meter.summary_ms()
+    finally:
+        plant.close()
     print("-" * 56)
     print(f"RTF  {s['rtf']:.3f}   (sim {s['sim_s']:.1f}s / wall {s['wall_s']:.1f}s)")
     print(f"FPS  {s['fps']:.1f}   over {s['n']} physics frames")

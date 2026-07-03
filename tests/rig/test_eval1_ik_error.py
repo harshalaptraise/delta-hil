@@ -36,14 +36,14 @@ def _reachable_targets(geom, n_per_axis=6):
 
 def test_ik_error_p95_under_half_mm(delta_usd):
     geom = DEFAULT_DELTA_GEOM
-    plant = IsaacPlant(delta_usd, headless=True, geom=geom, grasp_mode="ideal")
     errs = []
-    for tgt in _reachable_targets(geom):
-        plant.apply_commands({"cmd.target_xyz": tuple(tgt), "cmd.grip": False})
-        for _ in range(250):                       # ~1 s of settling at 250 Hz
-            plant.step(0.004)
-        tcp = plant.read_sensors()["sensor.tcp_xyz"]
-        errs.append(float(np.linalg.norm(np.asarray(tcp) - np.asarray(tgt))))
+    with IsaacPlant(delta_usd, headless=True, geom=geom, grasp_mode="ideal") as plant:
+        for tgt in _reachable_targets(geom):
+            plant.apply_commands({"cmd.target_xyz": tuple(tgt), "cmd.grip": False})
+            for _ in range(250):                   # ~1 s of settling at 250 Hz
+                plant.step(0.004)
+            tcp = plant.read_sensors()["sensor.tcp_xyz"]
+            errs.append(float(np.linalg.norm(np.asarray(tcp) - np.asarray(tgt))))
     p95 = float(np.percentile(errs, 95))
     print(f"eval1: n={len(errs)} p95={p95:.4f} mm max={max(errs):.4f} mm")
     assert p95 < 0.5, f"eval 1 FAIL: P95 IK error {p95:.4f} mm >= 0.5 mm"
