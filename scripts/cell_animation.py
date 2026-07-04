@@ -33,12 +33,12 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 random.seed(7)
 
 # --- run + belts (metres, frames) ------------------------------------------
-F = 220                 # total frames (raise for more boxes; ~linear render cost)
+F = 500                 # total frames (raise for more boxes; ~linear render cost)
 Tc = 24                 # frames per pick-place cycle
 VS = 0.011              # product belt velocity (+X, m/frame)
 VB = 0.0075             # box belt velocity (+X, m/frame)
 DT_TORT = 20            # tortilla spawn interval -> ~0.5-diameter gap between products
-DT_BOX = 24             # box spawn interval
+DT_BOX = 42             # box spawn interval -> ~0.32 m spacing > 0.26 m tote (no overlap)
 XL = -cs.BELT_LEN / 2 - 0.15
 XR = cs.BELT_LEN / 2 + 0.05
 HIDE = (5.0, 3.0, -3.0)   # park unused/exited prims off-camera
@@ -103,8 +103,8 @@ omni.usd.get_context().new_stage()
 stage = omni.usd.get_context().get_stage()
 bases = cs.build_cell(stage, IRB360)
 
-N_TORT = F // DT_TORT + 6
-N_BOX = F // DT_BOX + 4
+N_TORT = F // DT_TORT + 25   # extra: placed tortillas ride boxes until the box exits
+N_BOX = F // DT_BOX + 6
 for i in range(N_TORT):
     cs.spawn_tortilla(stage, f"/World/T_{i}", HIDE)
 for i in range(N_BOX):
@@ -123,7 +123,7 @@ import omni.replicator.core as rep  # noqa: E402
 from PIL import Image  # noqa: E402
 
 cam = rep.create.camera(position=(2.0, 3.8, 2.6), look_at=(0.0, 0.0, 0.5))
-rp = rep.create.render_product(cam, (960, 600))
+rp = rep.create.render_product(cam, (860, 540))   # smaller -> manageable 500-frame gif
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
 for _ in range(12):
