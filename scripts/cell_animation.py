@@ -33,7 +33,7 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 random.seed(7)
 
 # --- run + belts (metres, frames) ------------------------------------------
-F = 500                 # total frames (raise for more boxes; ~linear render cost)
+F = 710                 # total frames (~17 boxes; +42 frames per extra box)
 Tc = 24                 # frames per pick-place cycle
 VS = 0.011              # product belt velocity (+X, m/frame)
 VB = 0.0075             # box belt velocity (+X, m/frame)
