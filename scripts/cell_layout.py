@@ -82,21 +82,20 @@ box(stage, "/World/BoxConveyor", (BELT_LEN, 0.40, BELT_H),
 box(stage, "/World/SrcConveyor", (BELT_LEN, 0.34, BELT_H),
     (0.0, SRC_Y, SRC_TOP - BELT_H / 2), color=(0.25, 0.28, 0.32))
 # stands under the elevated source conveyor
-for sx in (-1.0, 0.0, 1.0):
-    box(stage, f"/World/SrcStand_{sx}", (0.08, 0.08, SRC_TOP - BELT_H),
+for i, sx in enumerate((-1.0, 0.0, 1.0)):
+    box(stage, f"/World/SrcStand_{i}", (0.08, 0.08, SRC_TOP - BELT_H),
         (sx, SRC_Y, (SRC_TOP - BELT_H) / 2), color=(0.22, 0.24, 0.27))
 
 # portal gantry: 4 legs + top perimeter beams + a central mount beam
 GY, GX, GTZ = 0.5, 0.95, BASE_Z + 0.12
-for lx in (-GX, GX):
-    for ly in (-GY, GY):
-        box(stage, f"/World/Gantry_leg_{lx}_{ly}", (0.07, 0.07, GTZ),
-            (lx, ly, GTZ / 2), color=(0.3, 0.32, 0.36))
-for ly in (-GY, GY):
-    box(stage, f"/World/Gantry_beamX_{ly}", (2 * GX, 0.09, 0.09), (0.0, ly, GTZ),
+for i, (lx, ly) in enumerate([(-GX, -GY), (-GX, GY), (GX, -GY), (GX, GY)]):
+    box(stage, f"/World/Gantry_leg_{i}", (0.07, 0.07, GTZ),
+        (lx, ly, GTZ / 2), color=(0.3, 0.32, 0.36))
+for i, ly in enumerate((-GY, GY)):
+    box(stage, f"/World/Gantry_beamX_{i}", (2 * GX, 0.09, 0.09), (0.0, ly, GTZ),
         color=(0.3, 0.32, 0.36))
-for lx in (-GX, GX):
-    box(stage, f"/World/Gantry_beamY_{lx}", (0.09, 2 * GY, 0.09), (lx, 0.0, GTZ),
+for i, lx in enumerate((-GX, GX)):
+    box(stage, f"/World/Gantry_beamY_{i}", (0.09, 2 * GY, 0.09), (lx, 0.0, GTZ),
         color=(0.3, 0.32, 0.36))
 box(stage, "/World/Gantry_mount", (2 * GX, 0.14, 0.12), (0.0, 0.0, BASE_Z + 0.05),
     color=(0.28, 0.30, 0.34))
