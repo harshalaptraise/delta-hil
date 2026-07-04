@@ -78,7 +78,7 @@ def tcp_for(rb, f):
     rx = rb["rx"]
     home = np.array([rx, 0.0, HOME_Z])
     name, u = phase_of((f - rb["s"]) / Tc)
-    tx = rx + VS * (f - rb["tp"])
+    tx = tort_x(rb["tort"], f)            # track the tortilla's ACTUAL belt position
     bx = box_x(rb["box"], f) if rb["box"] else rx
     yj, sz = rb["yj"], STACK0 + rb["slot"] * THICK
     if name == "rest":
@@ -87,10 +87,10 @@ def tcp_for(rb, f):
         b = np.array([tx, yj, PICK_HI]); return home + (b - home) * u
     if name == "track_pick":
         return np.array([tx, yj, PICK_HI + (PICK_Z - PICK_HI) * min(u / DESC, 1.0)])
-    if name == "lift":
-        return np.array([rx, yj, PICK_Z + (PICK_HI - PICK_Z) * u])
+    if name == "lift":                   # release tracking; lift from the grab point
+        return np.array([rb["grab_x"], yj, PICK_Z + (PICK_HI - PICK_Z) * u])
     if name == "transfer":
-        a = np.array([rx, yj, PICK_HI]); b = np.array([bx, cs.BOX_Y, PLACE_HI])
+        a = np.array([rb["grab_x"], yj, PICK_HI]); b = np.array([bx, cs.BOX_Y, PLACE_HI])
         return a + (b - a) * u
     if name == "track_place":
         return np.array([bx, cs.BOX_Y, PLACE_HI + (sz - PLACE_HI) * min(u / DESC, 1.0)])
@@ -181,6 +181,7 @@ for f in range(F):
                 rb.update({"state": "busy", "s": f, "tp": f + F_PICK * Tc,
                            "tpl": f + F_PLACE * Tc, "yj": cand["lane"],
                            "tort": cand, "box": bx, "slot": bx["fill"],
+                           "grab_x": tort_x(cand, f + F_PICK * Tc),  # tortilla x at grab
                            "grabbed": False, "placed": False})
                 cand["state"] = "assigned"; bx["fill"] += 1
 
