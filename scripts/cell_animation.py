@@ -37,8 +37,8 @@ F = 220                 # total frames (raise for more boxes; ~linear render cos
 Tc = 24                 # frames per pick-place cycle
 VS = 0.011              # product belt velocity (+X, m/frame)
 VB = 0.0075             # box belt velocity (+X, m/frame)
-DT_TORT = 13            # tortilla spawn interval (gap between products)
-DT_BOX = 26             # box spawn interval
+DT_TORT = 20            # tortilla spawn interval -> ~0.5-diameter gap between products
+DT_BOX = 24             # box spawn interval
 XL = -cs.BELT_LEN / 2 - 0.15
 XR = cs.BELT_LEN / 2 + 0.05
 HIDE = (5.0, 3.0, -3.0)   # park unused/exited prims off-camera
@@ -141,11 +141,14 @@ def capture():
 
 print(f"[cell] streaming {F} frames ...")
 imgs = []
+spawn_count = 0
 for f in range(F):
-    # spawn
+    # spawn: alternate which robot 'prefers' each tortilla (A upstream / B downstream)
     if f % DT_TORT == 0 and free_t:
-        torts.append({"idx": free_t.pop(0), "spawn": f, "state": "belt",
+        pref = "Robot_A" if spawn_count % 2 == 0 else "Robot_B"
+        torts.append({"idx": free_t.pop(0), "spawn": f, "state": "belt", "pref": pref,
                       "lane": cs.SRC_Y + random.uniform(-0.05, 0.05)})
+        spawn_count += 1
     if f % DT_BOX == 0 and free_b:
         boxes.append({"idx": free_b.pop(0), "spawn": f, "fill": 0})
 
@@ -165,14 +168,16 @@ for f in range(F):
                 rb["state"] = "idle"; rb["box"] = None
         if rb["state"] == "idle":
             want = rx - VS * F_PICK * Tc               # tortilla should be here to start now
-            cand = min((t for t in torts if t["state"] == "belt"
-                        and abs(tort_x(t, f) - want) < PICK_TOL),
-                       key=lambda t: abs(tort_x(t, f) - want), default=None)
+            # A takes its own share; B (downstream) takes its own + anything A missed
+            pool = [t for t in torts if t["state"] == "belt"
+                    and abs(tort_x(t, f) - want) < PICK_TOL
+                    and (name == "Robot_B" or t["pref"] == "Robot_A")]
+            cand = min(pool, key=lambda t: abs(tort_x(t, f) - want), default=None)
             # a box that will be near rx at place time
             place_f = f + F_PLACE * Tc
             bx = min((b for b in boxes if box_x(b, place_f) < XR),
                      key=lambda b: abs(box_x(b, place_f) - rx), default=None)
-            if cand and bx and abs(box_x(bx, place_f) - rx) < 0.28:
+            if cand and bx and abs(box_x(bx, place_f) - rx) < 0.36:
                 rb.update({"state": "busy", "s": f, "tp": f + F_PICK * Tc,
                            "tpl": f + F_PLACE * Tc, "yj": cand["lane"],
                            "tort": cand, "box": bx, "slot": bx["fill"],
