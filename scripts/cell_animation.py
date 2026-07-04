@@ -37,23 +37,26 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 random.seed(11)
 
 # --- timing + belts (metres, frames) ---------------------------------------
-Tc = 24                 # frames per pick-place cycle (more -> smoother)
+Tc = 24                 # frames per pick-place cycle
 N = 2                   # cycles per robot
-VS = 0.010              # product belt velocity (+X, m/frame)
-VB = 0.007              # box belt velocity (+X, m/frame)
+VS = 0.007              # product belt velocity (+X, m/frame) -- slower, tracking clearer
+VB = 0.005              # box belt velocity (+X, m/frame)
 STAGGER = Tc // 2       # robot B is half a cycle out of phase
 
 HOME_Z = 0.42
-PICK_Z = cs.PART_Z + 0.01
+PICK_Z = cs.PART_Z + 0.005
 PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
-STACK0 = cs.BOX_TOP + 0.03     # first tortilla just above the tote floor
+STACK0 = cs.BOX_TOP + 0.02      # place deep -- near the tote floor (no collision)
 THICK = 0.014
+DESC = 0.6                      # fraction of a track phase spent descending (rest = holding)
 
-# phase boundaries as fractions of Tc (grab at end of 'pick', release end of 'place')
-PH = [("rest", 0.05), ("approach", 0.34), ("pick", 0.46), ("lift", 0.55),
-      ("transfer", 0.72), ("matchbox", 0.82), ("place", 0.93), ("home", 1.0)]
-F_PICK, F_PLACE = 0.46, 0.93
+# long, clearly-visible tracking windows: track_pick / track_place each velocity-
+# match the moving object for ~1/4 of the cycle (sync -> descend -> hold).
+PH = [("rest", 0.05), ("approach", 0.22), ("track_pick", 0.46), ("lift", 0.56),
+      ("transfer", 0.70), ("track_place", 0.92), ("home", 1.0)]
+F_PICK = 0.22 + DESC * (0.46 - 0.22)    # grab when descent completes
+F_PLACE = 0.70 + DESC * (0.92 - 0.70)   # release when descent completes
 
 
 def phase_of(tau):
@@ -80,18 +83,22 @@ def tcp_for(rb, cy, f):
         return home
     if name == "approach":                # home -> above & alongside the tortilla
         b = np.array([tx, yj, PICK_HI]); return home + (b - home) * u
-    if name == "pick":                    # track x, descend to grab
-        return np.array([tx, yj, PICK_HI + (PICK_Z - PICK_HI) * u])
+    if name == "track_pick":              # velocity-match tortilla: sync, descend, hold
+        z = PICK_HI + (PICK_Z - PICK_HI) * min(u / DESC, 1.0)
+        return np.array([tx, yj, z])
     if name == "lift":                    # tracking released; lift from grab point
         return np.array([rx, yj, PICK_Z + (PICK_HI - PICK_Z) * u])
     if name == "transfer":                # carry over to the box belt
         a = np.array([rx, yj, PICK_HI]); b = np.array([bx, cs.BOX_Y, PLACE_HI])
         return a + (b - a) * u
-    if name == "matchbox":                # sync to box velocity
-        return np.array([bx, cs.BOX_Y, PLACE_HI])
-    if name == "place":                   # track box, descend, release
-        return np.array([bx, cs.BOX_Y, PLACE_HI + (sz - PLACE_HI) * u])
-    a = np.array([bx, cs.BOX_Y, PLACE_HI]); return a + (home - a) * u   # home
+    if name == "track_place":             # velocity-match box: sync, descend deep, hold
+        z = PLACE_HI + (sz - PLACE_HI) * min(u / DESC, 1.0)
+        return np.array([bx, cs.BOX_Y, z])
+    # home: retract up out of the tote, then return to rest
+    a = np.array([bx, cs.BOX_Y, sz]); mid = np.array([bx, cs.BOX_Y, PLACE_HI])
+    if u < 0.4:
+        return a + (mid - a) * (u / 0.4)
+    return mid + (home - mid) * ((u - 0.4) / 0.6)
 
 
 def eval_robot(rb, f):

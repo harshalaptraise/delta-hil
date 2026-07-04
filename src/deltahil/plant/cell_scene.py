@@ -67,8 +67,10 @@ def build_cell(stage, irb360_path):
         _box(stage, f"/World/Frame_topX_{i}", (FR_L, _C, _C), (0, cy, DECK_Z), _STEEL)
     for i, cx in enumerate(col_x):
         _box(stage, f"/World/Frame_topY_{i}", (_C, FR_W, _C), (cx, 0, DECK_Z), _STEEL)
-    for j, rz in enumerate((0.55, 1.05)):
-        for i, cy in enumerate(col_y):
+    for j, rz in enumerate((0.55, 1.05)):    # side rails (cage look) -- FAR side only;
+        for i, cy in enumerate(col_y):        # the near (+Y, camera) side stays open so
+            if cy > 0:                        # the belts/totes aren't blocked from view
+                continue
             _box(stage, f"/World/Frame_rail_{j}_{i}", (FR_L, _C, _C), (0, cy, rz), _STEEL)
 
     mount_r = 0.20
