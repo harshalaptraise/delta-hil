@@ -1,16 +1,12 @@
-"""Two-robot IRB 360 cell with CONVEYOR TRACKING.
+"""Two-robot IRB 360 cell -- continuous production with conveyor tracking.
 
-Both belts move; each robot picks a moving tortilla off the product belt and
-places it into a moving box on the box belt, synchronising its TCP to the belt
-velocity (pick-on-the-fly / place-on-the-fly). Motion profile per pick:
-  rest -> match Y -> match X-velocity (track) -> descend & grab -> release track
-  -> transfer -> match box velocity -> descend & place -> return.
-Robots run staggered (out of phase); tortillas arrive at random lanes; extra
-product flows on the belt for realism.
+Tortillas and boxes stream in from the left, travel the belts, and exit the
+right. Each robot reactively picks an arriving tortilla (velocity-matched, on the
+fly) and places it into a passing box (also velocity-matched). A picked tortilla
+vanishes from the belt at the pick; an un-picked one rides off the end. Boxes
+fill as they pass and exit full. No scene reset -- it just keeps running.
 
-Reuses deltahil.plant.cell_scene (frame/belts/robots) and irb360_pose.pose (per
-robot, local frame). Output: assets/render/cell_pick.gif.
-
+Reuses deltahil.plant.cell_scene + irb360_pose.pose. Output: cell_pick.gif.
 Run on the rig (inside isaacenv):  python scripts/cell_animation.py
 """
 from __future__ import annotations
@@ -34,29 +30,31 @@ IRB360 = os.path.join(REPO, "assets", "irb360.usd").replace("\\", "/")
 RENDER_DIR = os.path.join(REPO, "assets", "render").replace("\\", "/")
 OUT_GIF = os.path.join(RENDER_DIR, "cell_pick.gif").replace("\\", "/")
 os.makedirs(RENDER_DIR, exist_ok=True)
-random.seed(11)
+random.seed(7)
 
-# --- timing + belts (metres, frames) ---------------------------------------
+# --- run + belts (metres, frames) ------------------------------------------
+F = 220                 # total frames (raise for more boxes; ~linear render cost)
 Tc = 24                 # frames per pick-place cycle
-N = 2                   # cycles per robot
-VS = 0.007              # product belt velocity (+X, m/frame) -- slower, tracking clearer
-VB = 0.005              # box belt velocity (+X, m/frame)
-STAGGER = Tc // 2       # robot B is half a cycle out of phase
+VS = 0.011              # product belt velocity (+X, m/frame)
+VB = 0.0075             # box belt velocity (+X, m/frame)
+DT_TORT = 13            # tortilla spawn interval (gap between products)
+DT_BOX = 26             # box spawn interval
+XL = -cs.BELT_LEN / 2 - 0.15
+XR = cs.BELT_LEN / 2 + 0.05
+HIDE = (5.0, 3.0, -3.0)   # park unused/exited prims off-camera
 
 HOME_Z = 0.42
 PICK_Z = cs.PART_Z + 0.005
 PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
-STACK0 = cs.BOX_TOP + 0.02      # place deep -- near the tote floor (no collision)
+STACK0 = cs.BOX_TOP + 0.02
 THICK = 0.014
-DESC = 0.6                      # fraction of a track phase spent descending (rest = holding)
-
-# long, clearly-visible tracking windows: track_pick / track_place each velocity-
-# match the moving object for ~1/4 of the cycle (sync -> descend -> hold).
+DESC = 0.6
 PH = [("rest", 0.05), ("approach", 0.22), ("track_pick", 0.46), ("lift", 0.56),
       ("transfer", 0.70), ("track_place", 0.92), ("home", 1.0)]
-F_PICK = 0.22 + DESC * (0.46 - 0.22)    # grab when descent completes
-F_PLACE = 0.70 + DESC * (0.92 - 0.70)   # release when descent completes
+F_PICK = 0.22 + DESC * (0.46 - 0.22)
+F_PLACE = 0.70 + DESC * (0.92 - 0.70)
+PICK_TOL = 0.09          # start a cycle when a tortilla is within this of the ideal x
 
 
 def phase_of(tau):
@@ -68,135 +66,161 @@ def phase_of(tau):
     return "home", 1.0
 
 
-def box_x(rb, f):
-    return rb["box0"] + VB * f
+def tort_x(t, f):
+    return XL + VS * (f - t["spawn"])
 
 
-def tcp_for(rb, cy, f):
+def box_x(b, f):
+    return XL + VB * (f - b["spawn"])
+
+
+def tcp_for(rb, f):
     rx = rb["rx"]
     home = np.array([rx, 0.0, HOME_Z])
-    name, u = phase_of((f - cy["s"]) / Tc)
-    tx = rx + VS * (f - cy["tp"])         # tortilla x now (== rx at grab time)
-    bx = box_x(rb, f)                     # box x now
-    yj, sz = cy["yj"], STACK0 + cy["k"] * THICK
+    name, u = phase_of((f - rb["s"]) / Tc)
+    tx = rx + VS * (f - rb["tp"])
+    bx = box_x(rb["box"], f) if rb["box"] else rx
+    yj, sz = rb["yj"], STACK0 + rb["slot"] * THICK
     if name == "rest":
         return home
-    if name == "approach":                # home -> above & alongside the tortilla
+    if name == "approach":
         b = np.array([tx, yj, PICK_HI]); return home + (b - home) * u
-    if name == "track_pick":              # velocity-match tortilla: sync, descend, hold
-        z = PICK_HI + (PICK_Z - PICK_HI) * min(u / DESC, 1.0)
-        return np.array([tx, yj, z])
-    if name == "lift":                    # tracking released; lift from grab point
+    if name == "track_pick":
+        return np.array([tx, yj, PICK_HI + (PICK_Z - PICK_HI) * min(u / DESC, 1.0)])
+    if name == "lift":
         return np.array([rx, yj, PICK_Z + (PICK_HI - PICK_Z) * u])
-    if name == "transfer":                # carry over to the box belt
+    if name == "transfer":
         a = np.array([rx, yj, PICK_HI]); b = np.array([bx, cs.BOX_Y, PLACE_HI])
         return a + (b - a) * u
-    if name == "track_place":             # velocity-match box: sync, descend deep, hold
-        z = PLACE_HI + (sz - PLACE_HI) * min(u / DESC, 1.0)
-        return np.array([bx, cs.BOX_Y, z])
-    # home: retract up out of the tote, then return to rest
+    if name == "track_place":
+        return np.array([bx, cs.BOX_Y, PLACE_HI + (sz - PLACE_HI) * min(u / DESC, 1.0)])
     a = np.array([bx, cs.BOX_Y, sz]); mid = np.array([bx, cs.BOX_Y, PLACE_HI])
-    if u < 0.4:
-        return a + (mid - a) * (u / 0.4)
-    return mid + (home - mid) * ((u - 0.4) / 0.6)
+    return a + (mid - a) * (u / 0.4) if u < 0.4 else mid + (home - mid) * ((u - 0.4) / 0.6)
 
 
-def eval_robot(rb, f):
-    rx = rb["rx"]
-    cur = next((cy for cy in rb["cycles"] if cy["s"] <= f < cy["s"] + Tc), None)
-    tcp = tcp_for(rb, cur, f) if cur else np.array([rx, 0.0, HOME_Z])
-    pos = {}
-    for cy in rb["cycles"]:
-        if f < cy["tp"]:                                   # travelling to the pick
-            pos[cy["tort"]] = (rx + VS * (f - cy["tp"]), cy["yj"], cs.PART_Z + 0.006)
-        elif f < cy["tpl"]:                                # carried (tracks the TCP)
-            pos[cy["tort"]] = tuple(tcp + np.array([0, 0, -0.02]))
-        else:                                              # placed, riding the box
-            pos[cy["tort"]] = (box_x(rb, f), cs.BOX_Y, STACK0 + cy["k"] * THICK)
-    return tcp, pos
-
-
-def make_robot(rx, start, tpaths):
-    cycles = []
-    for k in range(N):
-        s = start + k * Tc
-        cycles.append({"k": k, "s": s, "tp": s + F_PICK * Tc, "tpl": s + F_PLACE * Tc,
-                       "tort": tpaths[k], "yj": cs.SRC_Y + random.uniform(-0.05, 0.05)})
-    return {"rx": rx, "cycles": cycles, "box0": rx - 0.10 - VB * cycles[0]["tpl"]}
-
-
-# --- build the stage --------------------------------------------------------
+# --- build the stage + prim pools ------------------------------------------
 omni.usd.get_context().new_stage()
 stage = omni.usd.get_context().get_stage()
 bases = cs.build_cell(stage, IRB360)
 
-robots, TORT = {}, {}
-for i, (name, (rx, _, _)) in enumerate(cs.ROBOTS.items()):
-    TORT[name] = [f"/World/Tortilla_{name}_{j}" for j in range(N)]
-    robots[name] = make_robot(rx, i * STAGGER, TORT[name])
-    cs.spawn_box(stage, f"/World/Box_{name}", (robots[name]["box0"], cs.BOX_Y, cs.BOX_TOP))
-    for tp in TORT[name]:
-        cs.spawn_tortilla(stage, tp, (-cs.BELT_LEN, cs.SRC_Y, cs.PART_Z + 0.006))
-
-# background product flowing on the belt (looping)
-BG = [{"path": f"/World/BG_{i}", "off": random.uniform(0, cs.BELT_LEN),
-       "y": cs.SRC_Y + random.uniform(-0.06, 0.06)} for i in range(7)]
-for bg in BG:
-    cs.spawn_tortilla(stage, bg["path"], (0, bg["y"], cs.PART_Z + 0.006))
-LEFT = -cs.BELT_LEN / 2
+N_TORT = F // DT_TORT + 6
+N_BOX = F // DT_BOX + 4
+for i in range(N_TORT):
+    cs.spawn_tortilla(stage, f"/World/T_{i}", HIDE)
+for i in range(N_BOX):
+    cs.spawn_box(stage, f"/World/B_{i}", HIDE)
+free_t, free_b = list(range(N_TORT)), list(range(N_BOX))
+torts, boxes = [], []       # active items
+robots = {name: {"rx": rx, "state": "idle", "box": None}
+          for name, (rx, _, _) in cs.ROBOTS.items()}
 
 for _ in range(60):
     app.update()
-
 UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
 UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0)
 
 import omni.replicator.core as rep  # noqa: E402
 from PIL import Image  # noqa: E402
 
-# view from the +Y (box-belt) side, elevated, so the boxes are nearest the
-# observer and the belts run left-right -> conveyor tracking is clearly visible
 cam = rep.create.camera(position=(2.0, 3.8, 2.6), look_at=(0.0, 0.0, 0.5))
-rp = rep.create.render_product(cam, (1000, 640))
+rp = rep.create.render_product(cam, (960, 600))
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
 for _ in range(12):
-    rep.orchestrator.step(rt_subframes=16)
+    rep.orchestrator.step(rt_subframes=12)
 
 
 def capture():
     for _ in range(6):
-        rep.orchestrator.step(rt_subframes=16)
+        rep.orchestrator.step(rt_subframes=12)
         a = np.asarray(rgb.get_data())
         if a.ndim == 3 and a.size and a.shape[2] >= 3:
             return a[:, :, :3].astype("uint8")
     return None
 
 
-F = STAGGER + N * Tc + 4
-print(f"[cell] rendering {F} frames (conveyor tracking) ...")
+print(f"[cell] streaming {F} frames ...")
 imgs = []
 for f in range(F):
-    for name in cs.ROBOTS:
-        rb = robots[name]
-        tgt, tort_pos = eval_robot(rb, f)
-        pose(stage, f"/World/Cell/{name}", world_to_local(bases[name], tgt))
-        cs.move_prim(stage, f"/World/Box_{name}", (box_x(rb, f), cs.BOX_Y, cs.BOX_TOP))
-        for tp, p in tort_pos.items():
-            cs.move_prim(stage, tp, p)
-    for bg in BG:                              # looping background product
-        x = LEFT + ((bg["off"] + VS * f - LEFT) % cs.BELT_LEN)
-        cs.move_prim(stage, bg["path"], (x, bg["y"], cs.PART_Z + 0.006))
+    # spawn
+    if f % DT_TORT == 0 and free_t:
+        torts.append({"idx": free_t.pop(0), "spawn": f, "state": "belt",
+                      "lane": cs.SRC_Y + random.uniform(-0.05, 0.05)})
+    if f % DT_BOX == 0 and free_b:
+        boxes.append({"idx": free_b.pop(0), "spawn": f, "fill": 0})
+
+    # robot state machines
+    for name, rb in robots.items():
+        rx = rb["rx"]
+        if rb["state"] == "busy":
+            dt = f - rb["s"]
+            if not rb["grabbed"] and dt >= F_PICK * Tc:
+                rb["grabbed"] = True; rb["tort"]["state"] = "carried"
+            if not rb["placed"] and dt >= F_PLACE * Tc:
+                rb["placed"] = True
+                bx = rb["box"]
+                rb["tort"]["state"] = "placed"; rb["tort"]["box"] = bx
+                rb["tort"]["slot"] = rb["slot"]; bx["torts"] = bx.get("torts", []) + [rb["tort"]]
+            if dt >= Tc:
+                rb["state"] = "idle"; rb["box"] = None
+        if rb["state"] == "idle":
+            want = rx - VS * F_PICK * Tc               # tortilla should be here to start now
+            cand = min((t for t in torts if t["state"] == "belt"
+                        and abs(tort_x(t, f) - want) < PICK_TOL),
+                       key=lambda t: abs(tort_x(t, f) - want), default=None)
+            # a box that will be near rx at place time
+            place_f = f + F_PLACE * Tc
+            bx = min((b for b in boxes if box_x(b, place_f) < XR),
+                     key=lambda b: abs(box_x(b, place_f) - rx), default=None)
+            if cand and bx and abs(box_x(bx, place_f) - rx) < 0.28:
+                rb.update({"state": "busy", "s": f, "tp": f + F_PICK * Tc,
+                           "tpl": f + F_PLACE * Tc, "yj": cand["lane"],
+                           "tort": cand, "box": bx, "slot": bx["fill"],
+                           "grabbed": False, "placed": False})
+                cand["state"] = "assigned"; bx["fill"] += 1
+
+    # poses + carried-tortilla tracking
+    for name, rb in robots.items():
+        if rb["state"] == "busy":
+            tcp = tcp_for(rb, f)
+            pose(stage, f"/World/Cell/{name}", world_to_local(bases[name], tcp))
+            if rb["tort"]["state"] == "carried":
+                rb["tort"]["cpos"] = tuple(tcp + np.array([0, 0, -0.02]))
+        else:
+            pose(stage, f"/World/Cell/{name}",
+                 world_to_local(bases[name], (rb["rx"], 0.0, HOME_Z)))
+
+    # advance + place items; set prim positions; retire exited
+    for b in list(boxes):
+        bx = box_x(b, f)
+        if bx > XR:
+            cs.move_prim(stage, f"/World/B_{b['idx']}", HIDE)
+            for t in b.get("torts", []):
+                cs.move_prim(stage, f"/World/T_{t['idx']}", HIDE); free_t.append(t["idx"]); (t in torts) and torts.remove(t)
+            free_b.append(b["idx"]); boxes.remove(b)
+        else:
+            cs.move_prim(stage, f"/World/B_{b['idx']}", (bx, cs.BOX_Y, cs.BOX_TOP))
+    for t in list(torts):
+        st = t["state"]
+        if st in ("belt", "assigned"):
+            x = tort_x(t, f)
+            if st == "belt" and x > XR:            # rode off the end un-picked
+                cs.move_prim(stage, f"/World/T_{t['idx']}", HIDE); free_t.append(t["idx"]); torts.remove(t); continue
+            cs.move_prim(stage, f"/World/T_{t['idx']}", (x, t["lane"], cs.PART_Z + 0.006))
+        elif st == "carried":
+            cs.move_prim(stage, f"/World/T_{t['idx']}", t.get("cpos", HIDE))
+        elif st == "placed":
+            cs.move_prim(stage, f"/World/T_{t['idx']}",
+                         (box_x(t["box"], f), cs.BOX_Y, STACK0 + t["slot"] * THICK))
+
     arr = capture()
     if arr is None:
-        print(f"  frame {f+1} skipped")
-        continue
+        print(f"  frame {f+1} skipped"); continue
     imgs.append(Image.fromarray(arr))
-    if f % 6 == 0:
-        print(f"  frame {f+1}/{F}")
+    if f % 20 == 0:
+        print(f"  frame {f+1}/{F}  torts={len(torts)} boxes={len(boxes)}")
 
 if imgs:
-    # one shared palette + no dithering -> no per-frame colour shimmer (flicker)
     try:
         pal = imgs[len(imgs) // 2].convert("P", palette=Image.ADAPTIVE, colors=128)
         fp = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in imgs]
