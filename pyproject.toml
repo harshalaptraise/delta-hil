@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.24"]
 [project.optional-dependencies]
 isaac = []            # Isaac Sim runtime is installed out-of-band (see plant/isaac_plant.py)
 logix = ["pycomm3>=1.2", "asyncua>=1.0"]   # real L8x: EtherNet/IP fast tier + OPC UA slow tier
+twincat = ["pyads>=3.4"]                    # TwinCAT via ADS (Loupe Beckhoff Bridge installed in Isaac out-of-band)
 dev = ["pytest>=7"]
 
 [project.scripts]
