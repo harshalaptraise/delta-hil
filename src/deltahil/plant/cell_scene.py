@@ -14,13 +14,15 @@ import math
 MM = 0.001
 ROBOT_X, BASE_Z = 0.70, 1.50
 ROBOTS = {"Robot_A": (-ROBOT_X, 0.0, BASE_Z), "Robot_B": (ROBOT_X, 0.0, BASE_Z)}
-SRC_Y, BOX_Y = -0.22, 0.22          # product & box belt centre-lines
-BOX_TOP = 0.15                       # box belt top height
-SRC_TOP = BOX_TOP + 0.30             # product belt ~1 ft higher
-PART_Z = SRC_TOP + 0.03              # a part rests on the product belt
-BELT_LEN = 2.6
+# belts kept within the robot's usable lateral reach (~+/-0.15 m; the CAD-derived
+# workspace is narrow -- forearms over-stretch beyond that)
+SRC_Y, BOX_Y = -0.15, 0.15          # product & box belt centre-lines
+BOX_TOP = 0.16                       # box belt top height
+SRC_TOP = BOX_TOP + 0.30             # product belt ~1 ft higher (taller boxes)
+PART_Z = SRC_TOP + 0.02              # a part rests on the product belt
+BELT_LEN = 3.0
 DECK_Z = BASE_Z
-FR_L, FR_W = 2.9, 1.5                # enclosure length x width
+FR_L, FR_W = 3.2, 1.8                # enclosure length x width (broadened)
 _STEEL = (0.10, 0.11, 0.13)
 _GREEN = (0.20, 0.55, 0.25)
 _C = 0.09

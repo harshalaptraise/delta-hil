@@ -10,3 +10,4 @@ venv/
 assets/usd/
 assets/render/
 assets/*.mp4
+assets/*.gif
