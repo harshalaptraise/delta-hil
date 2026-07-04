@@ -9,3 +9,4 @@ venv/
 .DS_Store
 assets/usd/
 assets/render/
+assets/*.mp4

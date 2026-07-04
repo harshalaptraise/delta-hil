@@ -73,34 +73,53 @@ UsdGeom.SetStageMetersPerUnit(stage, 1.0)
 UsdGeom.Xform.Define(stage, "/World")
 UsdGeom.Xform.Define(stage, "/World/Cell")
 
-box(stage, "/World/Floor", (3.4, 2.4, 0.02), (0.0, 0.0, 0.0), color=(0.35, 0.35, 0.38))
+import math as _m  # noqa: E402
 
-# conveyors (belt-top at *_TOP; a 0.15 m-tall belt body sits below it)
-BELT_H = 0.15
-box(stage, "/World/BoxConveyor", (BELT_LEN, 0.40, BELT_H),
-    (0.0, BOX_Y, BOX_TOP - BELT_H / 2), color=(0.25, 0.28, 0.32))
+STEEL = (0.10, 0.11, 0.13)      # black machine-frame steel
+GREEN = (0.20, 0.55, 0.25)      # belt surface
+DECK_Z = BASE_Z                 # robots mount on the top deck
+FR_L, FR_W = 2.9, 1.5           # enclosure length (X) x width (Y); wide -> arms clear
+c = 0.09                        # structural member thickness
+
+box(stage, "/World/Floor", (3.6, 2.4, 0.02), (0.0, 0.0, 0.0), color=(0.32, 0.33, 0.36))
+
+# conveyors: green belts, box belt low + product belt one foot higher
+BELT_H = 0.14
+box(stage, "/World/BoxConveyor", (BELT_LEN, 0.42, BELT_H),
+    (0.0, BOX_Y, BOX_TOP - BELT_H / 2), color=GREEN)
 box(stage, "/World/SrcConveyor", (BELT_LEN, 0.34, BELT_H),
-    (0.0, SRC_Y, SRC_TOP - BELT_H / 2), color=(0.25, 0.28, 0.32))
-# stands under the elevated source conveyor
-for i, sx in enumerate((-1.0, 0.0, 1.0)):
+    (0.0, SRC_Y, SRC_TOP - BELT_H / 2), color=GREEN)
+for i, sx in enumerate((-1.1, 0.0, 1.1)):   # stands under the elevated product belt
     box(stage, f"/World/SrcStand_{i}", (0.08, 0.08, SRC_TOP - BELT_H),
-        (sx, SRC_Y, (SRC_TOP - BELT_H) / 2), color=(0.22, 0.24, 0.27))
+        (sx, SRC_Y, (SRC_TOP - BELT_H) / 2), color=STEEL)
 
-# portal gantry: 4 legs + top perimeter beams + a central mount beam
-GY, GX, GTZ = 0.5, 0.95, BASE_Z + 0.12
-for i, (lx, ly) in enumerate([(-GX, -GY), (-GX, GY), (GX, -GY), (GX, GY)]):
-    box(stage, f"/World/Gantry_leg_{i}", (0.07, 0.07, GTZ),
-        (lx, ly, GTZ / 2), color=(0.3, 0.32, 0.36))
-for i, ly in enumerate((-GY, GY)):
-    box(stage, f"/World/Gantry_beamX_{i}", (2 * GX, 0.09, 0.09), (0.0, ly, GTZ),
-        color=(0.3, 0.32, 0.36))
-for i, lx in enumerate((-GX, GX)):
-    box(stage, f"/World/Gantry_beamY_{i}", (0.09, 2 * GY, 0.09), (lx, 0.0, GTZ),
-        color=(0.3, 0.32, 0.36))
-box(stage, "/World/Gantry_mount", (2 * GX, 0.14, 0.12), (0.0, 0.0, BASE_Z + 0.05),
-    color=(0.28, 0.30, 0.34))
+# --- machine enclosure (black steel cage; robots on the top deck) ----------
+COL_X = (-FR_L / 2, 0.0, FR_L / 2)   # columns at ends + centre; robots (+/-0.7) sit between, clear
+COL_Y = (-FR_W / 2, FR_W / 2)
+k = 0
+for cx in COL_X:                     # vertical columns floor -> deck
+    for cy in COL_Y:
+        box(stage, f"/World/Frame_col_{k}", (c, c, DECK_Z), (cx, cy, DECK_Z / 2), color=STEEL)
+        k += 1
+for i, cy in enumerate(COL_Y):       # top deck perimeter (X beams) -- open under each robot
+    box(stage, f"/World/Frame_topX_{i}", (FR_L, c, c), (0.0, cy, DECK_Z), color=STEEL)
+for i, cx in enumerate(COL_X):       # top deck cross members (Y beams) at the columns
+    box(stage, f"/World/Frame_topY_{i}", (c, FR_W, c), (cx, 0.0, DECK_Z), color=STEEL)
+for j, rz in enumerate((0.55, 1.05)):   # side rails at two heights (cage look)
+    for i, cy in enumerate(COL_Y):
+        box(stage, f"/World/Frame_rail_{j}_{i}", (FR_L, c, c), (0.0, cy, rz), color=STEEL)
 
-# a few parts on the source belt + boxes on the box belt (visual scale)
+# --- 3-point robot mounts on the deck (delta bolts via its 3 motor axes) ----
+MOUNT_R = 0.20
+for name, cfg in ROBOTS.items():
+    rx = cfg["base"][0]
+    for a, phi in enumerate((0.0, 120.0, 240.0)):     # pads at the 3 arm azimuths
+        px = rx + MOUNT_R * _m.cos(_m.radians(phi))
+        py = MOUNT_R * _m.sin(_m.radians(phi))
+        box(stage, f"/World/Mount_{name}_{a}", (0.15, 0.12, 0.05),
+            (px, py, DECK_Z + 0.025), color=(0.16, 0.17, 0.19))
+
+# a few parts on the product belt + boxes on the box belt (visual scale)
 for i, x in enumerate((-ROBOT_X, 0.0, ROBOT_X)):
     box(stage, f"/World/Part_{i}", (0.06, 0.06, 0.06), (x, SRC_Y, PART_Z), color=(0.85, 0.5, 0.2))
 for i, x in enumerate((-ROBOT_X, ROBOT_X)):
@@ -116,14 +135,18 @@ for name, cfg in ROBOTS.items():
 for _ in range(60):
     app.update()
 
-# pose each robot reaching the source pick point under it (world -> local mm)
+# pose robots at both reach extremes: A picks from the product belt, B places
+# over a box on the box belt (world target -> robot local mm)
 for name, cfg in ROBOTS.items():
     bx = cfg["base"][0]
-    pick_world = (bx, SRC_Y, PART_Z)
-    T_local = world_to_local(bases[name], pick_world)
+    if name == "Robot_A":
+        tgt = (bx, SRC_Y, PART_Z)             # pick from product belt (higher)
+    else:
+        tgt = (bx, BOX_Y, BOX_TOP + 0.18)     # place over a box (lower)
+    T_local = world_to_local(bases[name], tgt)
     pose(stage, f"/World/Cell/{name}", T_local)
-    print(f"  {name}: pick_world={pick_world}  T_local(mm)="
-          f"({T_local[0]:.0f},{T_local[1]:.0f},{T_local[2]:.0f})")
+    print(f"  {name}: tgt_world=({tgt[0]:.2f},{tgt[1]:.2f},{tgt[2]:.2f})  "
+          f"T_local(mm)=({T_local[0]:.0f},{T_local[1]:.0f},{T_local[2]:.0f})")
 
 # lights + render -----------------------------------------------------------
 UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
@@ -131,7 +154,7 @@ UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0
 
 import omni.replicator.core as rep  # noqa: E402
 
-cam = rep.create.camera(position=(3.4, -3.8, 2.5), look_at=(0.0, 0.0, 0.85))
+cam = rep.create.camera(position=(3.9, -4.3, 2.7), look_at=(0.0, 0.0, 0.8))
 rp = rep.create.render_product(cam, (1280, 720))
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
