@@ -102,8 +102,28 @@ def spawn_tortilla(stage, path, pos):
     return cyl
 
 
-def spawn_box(stage, path, pos):
-    _box(stage, path, (0.24, 0.24, 0.14), pos, (0.55, 0.4, 0.25))
+def spawn_box(stage, parent_path, pos):
+    """An open tote: a parent Xform (moved via move_prim) + floor + 4 low walls.
+    Panels are children with fixed LOCAL transforms, so moving the parent (a
+    translate-only op) keeps the tote's shape (unlike scaling the parent)."""
+    from pxr import Gf, UsdGeom
+    parent = UsdGeom.Xform.Define(stage, parent_path)
+    parent.AddTranslateOp().Set(Gf.Vec3d(*pos))
+    w, d, h, t = 0.26, 0.26, 0.10, 0.015
+    col = (0.60, 0.44, 0.28)
+
+    def panel(sub, size, lp):
+        cube = UsdGeom.Cube.Define(stage, f"{parent_path}/{sub}")
+        cube.CreateSizeAttr(1.0)
+        cube.AddTransformOp().Set(Gf.Matrix4d().SetScale(Gf.Vec3d(*size))
+                                  * Gf.Matrix4d().SetTranslate(Gf.Vec3d(*lp)))
+        cube.CreateDisplayColorAttr([Gf.Vec3f(*col)])
+
+    panel("floor", (w, d, t), (0, 0, 0))
+    panel("wx0", (t, d, h), (-w / 2, 0, h / 2))
+    panel("wx1", (t, d, h), (w / 2, 0, h / 2))
+    panel("wy0", (w, t, h), (0, -d / 2, h / 2))
+    panel("wy1", (w, t, h), (0, d / 2, h / 2))
 
 
 def move_prim(stage, path, pos):

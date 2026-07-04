@@ -37,17 +37,17 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 random.seed(11)
 
 # --- timing + belts (metres, frames) ---------------------------------------
-Tc = 16                 # frames per pick-place cycle
-N = 3                   # cycles per robot
-VS = 0.012              # product belt velocity (+X, m/frame)
-VB = 0.008              # box belt velocity (+X, m/frame)
+Tc = 24                 # frames per pick-place cycle (more -> smoother)
+N = 2                   # cycles per robot
+VS = 0.010              # product belt velocity (+X, m/frame)
+VB = 0.007              # box belt velocity (+X, m/frame)
 STAGGER = Tc // 2       # robot B is half a cycle out of phase
 
 HOME_Z = 0.42
 PICK_Z = cs.PART_Z + 0.01
-PICK_HI = cs.PART_Z + 0.08
+PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
-STACK0 = cs.BOX_TOP + 0.07
+STACK0 = cs.BOX_TOP + 0.03     # first tortilla just above the tote floor
 THICK = 0.014
 
 # phase boundaries as fractions of Tc (grab at end of 'pick', release end of 'place')
@@ -127,7 +127,7 @@ robots, TORT = {}, {}
 for i, (name, (rx, _, _)) in enumerate(cs.ROBOTS.items()):
     TORT[name] = [f"/World/Tortilla_{name}_{j}" for j in range(N)]
     robots[name] = make_robot(rx, i * STAGGER, TORT[name])
-    cs.spawn_box(stage, f"/World/Box_{name}", (robots[name]["box0"], cs.BOX_Y, cs.BOX_TOP + 0.07))
+    cs.spawn_box(stage, f"/World/Box_{name}", (robots[name]["box0"], cs.BOX_Y, cs.BOX_TOP))
     for tp in TORT[name]:
         cs.spawn_tortilla(stage, tp, (-cs.BELT_LEN, cs.SRC_Y, cs.PART_Z + 0.006))
 
@@ -147,17 +147,19 @@ UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0
 import omni.replicator.core as rep  # noqa: E402
 from PIL import Image  # noqa: E402
 
-cam = rep.create.camera(position=(3.9, -4.3, 2.7), look_at=(0.0, 0.0, 0.8))
+# view from the +Y (box-belt) side, elevated, so the boxes are nearest the
+# observer and the belts run left-right -> conveyor tracking is clearly visible
+cam = rep.create.camera(position=(2.0, 3.8, 2.6), look_at=(0.0, 0.0, 0.5))
 rp = rep.create.render_product(cam, (1000, 640))
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
 for _ in range(12):
-    rep.orchestrator.step(rt_subframes=8)
+    rep.orchestrator.step(rt_subframes=16)
 
 
 def capture():
     for _ in range(6):
-        rep.orchestrator.step(rt_subframes=8)
+        rep.orchestrator.step(rt_subframes=16)
         a = np.asarray(rgb.get_data())
         if a.ndim == 3 and a.size and a.shape[2] >= 3:
             return a[:, :, :3].astype("uint8")
@@ -172,7 +174,7 @@ for f in range(F):
         rb = robots[name]
         tgt, tort_pos = eval_robot(rb, f)
         pose(stage, f"/World/Cell/{name}", world_to_local(bases[name], tgt))
-        cs.move_prim(stage, f"/World/Box_{name}", (box_x(rb, f), cs.BOX_Y, cs.BOX_TOP + 0.07))
+        cs.move_prim(stage, f"/World/Box_{name}", (box_x(rb, f), cs.BOX_Y, cs.BOX_TOP))
         for tp, p in tort_pos.items():
             cs.move_prim(stage, tp, p)
     for bg in BG:                              # looping background product
@@ -187,7 +189,14 @@ for f in range(F):
         print(f"  frame {f+1}/{F}")
 
 if imgs:
-    imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=90, loop=0)
+    # one shared palette + no dithering -> no per-frame colour shimmer (flicker)
+    try:
+        pal = imgs[len(imgs) // 2].convert("P", palette=Image.ADAPTIVE, colors=128)
+        fp = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in imgs]
+        fp[0].save(OUT_GIF, save_all=True, append_images=fp[1:], duration=70, loop=0, disposal=2)
+    except Exception as exc:
+        print(f"[cell] palette quantize failed ({exc}); saving RGB gif")
+        imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=70, loop=0)
     print(f"\n[cell] wrote {OUT_GIF}  exists={os.path.exists(OUT_GIF)}  frames={len(imgs)}\n")
 else:
     print("\n[cell] no frames captured\n")
