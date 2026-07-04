@@ -30,11 +30,28 @@ ROBOT_LEAVES = {"UA1", "UA2", "UA3", "MovingPlate", "RevoluteLinkPlate",
 CELL_HINTS = ("conv", "belt", "box", "pick", "place", "infeed", "outfeed", "tote")
 
 
+def _composition(prim):
+    """Return list of (arc_type, asset_path) for references/payloads on a prim."""
+    arcs = []
+    refs = prim.GetMetadata("references")
+    if refs:
+        for r in getattr(refs, "prependedItems", []) + getattr(refs, "appendedItems", []) \
+                + getattr(refs, "explicitItems", []):
+            arcs.append(("reference", r.assetPath))
+    pay = prim.GetMetadata("payload")
+    if pay:
+        for p in getattr(pay, "prependedItems", []) + getattr(pay, "appendedItems", []) \
+                + getattr(pay, "explicitItems", []):
+            arcs.append(("payload", p.assetPath))
+    return arcs
+
+
 def main():
-    omni.usd.get_context().open_stage(USD)
-    for _ in range(60):
+    # open directly with pxr so we control payload loading + can read arcs
+    stage = Usd.Stage.Open(USD, load=Usd.Stage.LoadAll)
+    stage.Load()  # force-load every payload
+    for _ in range(30):
         app.update()
-    stage = omni.usd.get_context().get_stage()
 
     mpu = UsdGeom.GetStageMetersPerUnit(stage)
     up = UsdGeom.GetStageUpAxis(stage)
@@ -44,6 +61,30 @@ def main():
 
     xc = UsdGeom.XformCache(Usd.TimeCode.Default())
     all_prims = list(stage.Traverse())
+    all_incl = list(stage.TraverseAll())
+    print(f"prims: loaded={len(all_prims)}  including-unloaded={len(all_incl)}")
+
+    print("\n-- composition (references / payloads) --")
+    found_arc = False
+    for prim in all_incl:
+        arcs = _composition(prim)
+        for kind, path in arcs:
+            found_arc = True
+            print(f"  {prim.GetPath()}  {kind} -> {path}")
+    if not found_arc:
+        print("  (no authored references/payloads found)")
+
+    print("\n-- ALL Xform/mesh prims (name + world T, first 60) --")
+    shown = 0
+    for prim in all_prims:
+        if shown >= 60:
+            print("  ...(truncated)")
+            break
+        if prim.IsA(UsdGeom.Xformable):
+            m = xc.GetLocalToWorldTransform(prim)
+            t = m.ExtractTranslation()
+            print(f"  {prim.GetPath()} [{prim.GetTypeName()}]  T=({t[0]:.2f},{t[1]:.2f},{t[2]:.2f})")
+            shown += 1
 
     print("\n-- prim tree (depth<=3, Xformables show world T + rot) --")
     for prim in all_prims:
