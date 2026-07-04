@@ -33,13 +33,17 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 MM = 0.001  # our robot is mm; cell is metres
 
 # --- cell layout (metres) ---------------------------------------------------
+ROBOT_X = 0.70                       # robot bases at x = +/- ROBOT_X (1.4 m apart)
+BASE_Z = 1.50                        # robot mount height
 ROBOTS = {
-    "Robot_A": {"base": (-0.45, 0.0, 1.35)},
-    "Robot_B": {"base": (0.45, 0.0, 1.35)},
+    "Robot_A": {"base": (-ROBOT_X, 0.0, BASE_Z)},
+    "Robot_B": {"base": (+ROBOT_X, 0.0, BASE_Z)},
 }
-SRC_Y, BOX_Y = -0.20, 0.20          # source & box conveyor centre-lines (world y)
-CONV_Z = 0.10                        # conveyor top surface height
-PART_Z = CONV_Z + 0.03               # part sits on the source conveyor
+SRC_Y, BOX_Y = -0.22, 0.22           # source & box conveyor centre-lines (world y)
+BOX_TOP = 0.15                       # box conveyor belt-top height
+SRC_TOP = BOX_TOP + 0.30             # product conveyor ~1 ft higher (taller boxes)
+PART_Z = SRC_TOP + 0.03              # part sits on the source belt
+BELT_LEN = 2.6                       # conveyors run along X
 
 
 def box(stage, path, size, pos, color=(0.6, 0.6, 0.6)):
@@ -69,15 +73,39 @@ UsdGeom.SetStageMetersPerUnit(stage, 1.0)
 UsdGeom.Xform.Define(stage, "/World")
 UsdGeom.Xform.Define(stage, "/World/Cell")
 
-box(stage, "/World/Floor", (3.0, 2.0, 0.02), (0.0, 0.0, 0.0), color=(0.35, 0.35, 0.38))
-box(stage, "/World/SrcConveyor", (2.4, 0.3, 0.2), (0.0, SRC_Y, CONV_Z - 0.1), color=(0.25, 0.28, 0.32))
-box(stage, "/World/BoxConveyor", (2.4, 0.35, 0.2), (0.0, BOX_Y, CONV_Z - 0.1), color=(0.25, 0.28, 0.32))
+box(stage, "/World/Floor", (3.4, 2.4, 0.02), (0.0, 0.0, 0.0), color=(0.35, 0.35, 0.38))
 
-# a few parts on the source conveyor + boxes on the box conveyor (visual scale)
-for i, x in enumerate((-0.45, 0.0, 0.45)):
-    box(stage, f"/World/Part_{i}", (0.06, 0.06, 0.06), (x, SRC_Y, PART_Z), color=(0.8, 0.5, 0.2))
-for i, x in enumerate((-0.45, 0.45)):
-    box(stage, f"/World/Box_{i}", (0.18, 0.18, 0.12), (x, BOX_Y, CONV_Z + 0.06), color=(0.5, 0.35, 0.2))
+# conveyors (belt-top at *_TOP; a 0.15 m-tall belt body sits below it)
+BELT_H = 0.15
+box(stage, "/World/BoxConveyor", (BELT_LEN, 0.40, BELT_H),
+    (0.0, BOX_Y, BOX_TOP - BELT_H / 2), color=(0.25, 0.28, 0.32))
+box(stage, "/World/SrcConveyor", (BELT_LEN, 0.34, BELT_H),
+    (0.0, SRC_Y, SRC_TOP - BELT_H / 2), color=(0.25, 0.28, 0.32))
+# stands under the elevated source conveyor
+for sx in (-1.0, 0.0, 1.0):
+    box(stage, f"/World/SrcStand_{sx}", (0.08, 0.08, SRC_TOP - BELT_H),
+        (sx, SRC_Y, (SRC_TOP - BELT_H) / 2), color=(0.22, 0.24, 0.27))
+
+# portal gantry: 4 legs + top perimeter beams + a central mount beam
+GY, GX, GTZ = 0.5, 0.95, BASE_Z + 0.12
+for lx in (-GX, GX):
+    for ly in (-GY, GY):
+        box(stage, f"/World/Gantry_leg_{lx}_{ly}", (0.07, 0.07, GTZ),
+            (lx, ly, GTZ / 2), color=(0.3, 0.32, 0.36))
+for ly in (-GY, GY):
+    box(stage, f"/World/Gantry_beamX_{ly}", (2 * GX, 0.09, 0.09), (0.0, ly, GTZ),
+        color=(0.3, 0.32, 0.36))
+for lx in (-GX, GX):
+    box(stage, f"/World/Gantry_beamY_{lx}", (0.09, 2 * GY, 0.09), (lx, 0.0, GTZ),
+        color=(0.3, 0.32, 0.36))
+box(stage, "/World/Gantry_mount", (2 * GX, 0.14, 0.12), (0.0, 0.0, BASE_Z + 0.05),
+    color=(0.28, 0.30, 0.34))
+
+# a few parts on the source belt + boxes on the box belt (visual scale)
+for i, x in enumerate((-ROBOT_X, 0.0, ROBOT_X)):
+    box(stage, f"/World/Part_{i}", (0.06, 0.06, 0.06), (x, SRC_Y, PART_Z), color=(0.85, 0.5, 0.2))
+for i, x in enumerate((-ROBOT_X, ROBOT_X)):
+    box(stage, f"/World/Box_{i}", (0.20, 0.20, 0.16), (x, BOX_Y, BOX_TOP + 0.08), color=(0.5, 0.35, 0.2))
 
 bases = {}
 for name, cfg in ROBOTS.items():
@@ -104,7 +132,7 @@ UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0
 
 import omni.replicator.core as rep  # noqa: E402
 
-cam = rep.create.camera(position=(2.6, -3.0, 2.2), look_at=(0.0, 0.0, 0.6))
+cam = rep.create.camera(position=(3.4, -3.8, 2.5), look_at=(0.0, 0.0, 0.85))
 rp = rep.create.render_product(cam, (1280, 720))
 rgb = rep.AnnotatorRegistry.get_annotator("rgb")
 rgb.attach([rp])
