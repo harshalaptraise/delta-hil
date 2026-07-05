@@ -1,4 +1,4 @@
-# The clock is the contract
+# First Principles in Motion
 
 There is a particular kind of proof you can only feel with your finger on a variable.
 
@@ -62,7 +62,9 @@ if dt > 0:
     plant.step(dt)      # advance ONLY when the PLC clock actually ticked
 ```
 
-The PLC publishes its own nanosecond clock every cycle; the sim integrates by exactly that elapsed time, one plant step per sample. One authoritative clock — the controller's — drives both sides, and it self-corrects for the jitter in when the ADS packets happen to land. The measured round-trip settled at about **2 ms, with 0.26 ms of jitter**. The plant became a faithful follower of the controller's timeline.
+The PLC publishes its own nanosecond clock every cycle; the sim integrates by exactly that elapsed time, one plant step per sample. One authoritative clock — the controller's — drives both sides, and it self-corrects for the jitter in when the ADS packets happen to land. The measured round-trip settled at about **2 ms, with a quarter of a millisecond of jitter**. The plant became a faithful follower of the controller's timeline.
+
+That number is not a vanity metric — and it is the one I would put in front of anyone asking whether this transfers to a real robot. Loop latency *is* the tracking error budget: a part moving at a fifth of a metre per second, sampled two milliseconds late, is off by less than half a millimetre — inside grip tolerance with room to spare. The sub-millisecond jitter is the determinism real-time control actually requires; a loop that wanders is a loop you cannot trust to grip a moving object. This is precisely what has to survive the jump to hardware. A physical cell runs the *same* controller over a hard EtherCAT fieldbus, whose latency and jitter are tighter and more deterministic than a polled ADS link by construction. So the timing envelope the controller was validated in is one the real machine will meet or beat — the tracking that held against the twin will not fall apart against the robot for want of loop budget. Two milliseconds with a quarter of jitter is a green light. Ten with five would have been a warning to redesign the transport before ordering a single motor.
 
 That is the sentence I would attribute the whole project to: *the clock is the contract.* Positions, velocities, grip states — those are the easy signals. The one that has to be right, and is the one everyone skips, is time.
 

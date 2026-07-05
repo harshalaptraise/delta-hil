@@ -92,7 +92,9 @@ class CellPlant:
     def step(self, dt: float) -> None:
         self.t += dt
         while self.t >= self._next_part_t:                  # spawn tortillas
-            y = cs.SRC_Y + float(self._rng.uniform(-0.05, 0.05))
+            # keep lanes inside the reachable band: |SRC_Y|+spread < REACH_XY so no
+            # tortilla lands where the robot would over-reach (esp. B, the catch-all)
+            y = cs.SRC_Y + float(self._rng.uniform(-0.018, 0.018))
             self.parts.append({"id": self._pid, "x": XL, "y": y, "z": cs.PART_Z,
                                "state": "belt", "robot": None, "box": None, "slot": 0})
             self._pid += 1

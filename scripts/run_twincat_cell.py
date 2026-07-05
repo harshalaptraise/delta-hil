@@ -93,7 +93,7 @@ def _polish(stage):
             g = _np.clip(_np.array([107, 77, 48], _np.float32)
                          + rng.normal(0, 14, (256, 256, 1)), 0, 255).astype(_np.uint8)
             tp = os.path.join(RENDER_DIR, "belt_grain.png").replace("\\", "/")
-            _Img.fromarray(_np.repeat(g, 3, axis=2)).save(tp)
+            _Img.fromarray(g).save(tp)                       # g is already (H,W,3)
             rd = UsdShade.Shader.Define(stage, "/World/Look/Belt/ST")
             rd.CreateIdAttr("UsdPrimvarReader_float2")
             rd.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
