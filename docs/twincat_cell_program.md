@@ -61,6 +61,8 @@ VAR
     gx : LREAL; gy : LREAL;
     ptmr : TON; elapsed : TIME;
     locktmr : TON;           // rides the moving part before gripping (tracking lock)
+    plctmr : TON;            // place descend timer (runs ONLY while the tote is in-window)
+    box_id : DINT := -1;     // committed tote id (place into ONE tote, no mid-flight switch)
     i : INT; found : BOOL; boxfound : BOOL; bestd : LREAL;
     px : LREAL; py : LREAL; bx : LREAL; bfill : DINT;
     dx : LREAL; dy : LREAL; lat : LREAL;
@@ -85,7 +87,7 @@ IF phase = 1 AND elapsed > T#4S THEN phase := 0; part := -1; my_claim := -1; END
 CASE phase OF
 0:  // idle -- claim nearest upstream, catchable, un-claimed part in my share
     cmd_x := rx; cmd_y := 0.0; cmd_z := HOME_Z; cmd_grip := FALSE;
-    part := -1; my_claim := -1;
+    part := -1; my_claim := -1; box_id := -1;
     found := FALSE; bestd := 1.0E9;
     FOR i := 0 TO 5 DO
         IF GVL_Cell.part_valid[i] AND (GVL_Cell.part_id[i] <> other_claim) THEN
@@ -134,46 +136,66 @@ CASE phase OF
     cmd_x := gx; cmd_y := gy; cmd_z := PICK_HI; cmd_grip := TRUE;
     IF elapsed > T#250MS THEN phase := 3; END_IF
 
-3:  // transfer -- move to the nearest box, high
-    boxfound := FALSE; bestd := 1.0E9;
+3:  // transfer -- COMMIT to one tote (find the committed id; if gone, pick nearest)
+    plctmr(IN := FALSE);                                    // keep place timer reset until place
+    boxfound := FALSE;
     FOR i := 0 TO 3 DO
-        IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_x[i] <= rx + WIN + 500.0) THEN
-            IF ABS(GVL_Cell.box_x[i] - rx) < bestd THEN
-                bestd := ABS(GVL_Cell.box_x[i] - rx); bx := GVL_Cell.box_x[i];
-                bfill := GVL_Cell.box_fill[i]; boxfound := TRUE;
-            END_IF
+        IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_id[i] = box_id) THEN
+            bx := GVL_Cell.box_x[i]; bfill := GVL_Cell.box_fill[i]; boxfound := TRUE;
         END_IF
     END_FOR
+    IF NOT boxfound THEN                                    // commit to the nearest tote
+        bestd := 1.0E9;
+        FOR i := 0 TO 3 DO
+            IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_x[i] <= rx + WIN + 500.0) THEN
+                IF ABS(GVL_Cell.box_x[i] - rx) < bestd THEN
+                    bestd := ABS(GVL_Cell.box_x[i] - rx); bx := GVL_Cell.box_x[i];
+                    bfill := GVL_Cell.box_fill[i]; box_id := GVL_Cell.box_id[i]; boxfound := TRUE;
+                END_IF
+            END_IF
+        END_FOR
+    END_IF
     IF NOT boxfound THEN
-        cmd_x := rx; cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;     // hold, wait for a box
+        cmd_x := rx; cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;     // hold, wait for a tote
     ELSE
         IF (ABS(bx - rx) < WIN) AND (elapsed > T#150MS) THEN phase := 4; END_IF
         cmd_x := LIMIT(rx - WIN, bx, rx + WIN); cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;
     END_IF
 
-4:  // place -- track the box, descend, release
-    boxfound := FALSE; bestd := 1.0E9;
+4:  // place -- stay committed; descend timer runs ONLY while the tote is in-window
+    boxfound := FALSE;
     FOR i := 0 TO 3 DO
-        IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_x[i] <= rx + WIN + 500.0) THEN
-            IF ABS(GVL_Cell.box_x[i] - rx) < bestd THEN
-                bestd := ABS(GVL_Cell.box_x[i] - rx); bx := GVL_Cell.box_x[i];
-                bfill := GVL_Cell.box_fill[i]; boxfound := TRUE;
-            END_IF
+        IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_id[i] = box_id) THEN
+            bx := GVL_Cell.box_x[i]; bfill := GVL_Cell.box_fill[i]; boxfound := TRUE;
         END_IF
     END_FOR
+    IF NOT boxfound THEN                                    // committed tote gone -> re-pick nearest
+        bestd := 1.0E9;
+        FOR i := 0 TO 3 DO
+            IF GVL_Cell.box_valid[i] AND (GVL_Cell.box_x[i] <= rx + WIN + 500.0) THEN
+                IF ABS(GVL_Cell.box_x[i] - rx) < bestd THEN
+                    bestd := ABS(GVL_Cell.box_x[i] - rx); bx := GVL_Cell.box_x[i];
+                    bfill := GVL_Cell.box_fill[i]; box_id := GVL_Cell.box_id[i]; boxfound := TRUE;
+                END_IF
+            END_IF
+        END_FOR
+    END_IF
     IF NOT boxfound THEN
+        plctmr(IN := FALSE);
         cmd_x := rx; cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;   // no tote -> HOLD, never abandon
     ELSIF ABS(bx - rx) < WIN THEN
+        plctmr(IN := TRUE, PT := T#5S);                     // descend timer (only while tote in-window)
         cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + DINT_TO_LREAL(bfill) * THICK;
-        IF elapsed < T#350MS THEN cmd_grip := TRUE; ELSE cmd_grip := FALSE; END_IF
-        IF NOT grip_confirm THEN phase := 5; END_IF        // placed
+        IF plctmr.ET < T#350MS THEN cmd_grip := TRUE; ELSE cmd_grip := FALSE; END_IF
+        IF NOT grip_confirm THEN phase := 5; END_IF         // placed
     ELSE
+        plctmr(IN := FALSE);                                // tote drifted out -> reset timer, hover
         cmd_x := LIMIT(rx - WIN, bx, rx + WIN); cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;
     END_IF
 
 5:  // retract
     cmd_x := rx; cmd_y := 0.0; cmd_z := HOME_Z; cmd_grip := FALSE;
-    IF elapsed > T#250MS THEN phase := 0; part := -1; my_claim := -1; END_IF
+    IF elapsed > T#250MS THEN phase := 0; part := -1; my_claim := -1; box_id := -1; END_IF
 END_CASE
 
 // clamp into the reach envelope (P4) so no command is unreachable
