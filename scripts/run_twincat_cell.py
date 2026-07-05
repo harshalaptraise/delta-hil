@@ -54,41 +54,82 @@ def snapshot(plant):
 
 
 def _polish(stage):
-    """Additive industrial dressing (cell_scene stays frozen): brushed-steel PBR on
-    the frame, a base slab, a back panel + end kick-panels. Never touches the belts,
-    totes, robots, or the camera-facing (+Y) side."""
+    """Additive industrial dressing (cell_scene stays frozen): brushed steel on the
+    frame, a base slab + back/end panels, and the tortilla belt recoloured light
+    brown + grain. Nothing on the camera-facing (+Y) side or over the belts."""
     from pxr import Sdf, UsdShade
 
-    mtl = UsdShade.Material.Define(stage, "/World/Look/Steel")
-    sh = UsdShade.Shader.Define(stage, "/World/Look/Steel/PBR")
-    sh.CreateIdAttr("UsdPreviewSurface")
-    sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.34, 0.36, 0.40))
-    sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.85)
-    sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.34)
-    mtl.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+    def pbr(path, diffuse, metallic, roughness):
+        m = UsdShade.Material.Define(stage, path)
+        s = UsdShade.Shader.Define(stage, path + "/PBR")
+        s.CreateIdAttr("UsdPreviewSurface")
+        s.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*diffuse))
+        s.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
+        s.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+        m.CreateSurfaceOutput().ConnectToSource(s.ConnectableAPI(), "surface")
+        return m, s
 
-    def bind(prim):
+    def bind(prim, m):
         try:
-            UsdShade.MaterialBindingAPI.Apply(prim).Bind(mtl)
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(m)
         except Exception:
-            UsdShade.MaterialBindingAPI(prim).Bind(mtl)
+            UsdShade.MaterialBindingAPI(prim).Bind(m)
 
-    for prim in stage.Traverse():                          # steel on the frame + mounts
+    steel, _ = pbr("/World/Look/Steel", (0.34, 0.36, 0.40), 0.65, 0.55)   # brushed, less mirror
+    for prim in stage.Traverse():
         nm = prim.GetName()
         if nm.startswith("Frame") or nm.startswith("Mount"):
-            bind(prim)
+            bind(prim, steel)
 
-    def slab(path, size, pos, color, metal=True):
+    # --- source (tortilla) belt -> light brown, matte, with a little real grain ---
+    brown, bsh = pbr("/World/Look/Belt", (0.72, 0.58, 0.40), 0.0, 0.92)
+    src = stage.GetPrimAtPath("/World/SrcConveyor")
+    if src.IsValid():
+        bind(src, brown)
+        try:
+            import numpy as _np
+            from PIL import Image as _Img
+            rng = _np.random.default_rng(3)
+            g = _np.clip(_np.array([184, 148, 102], _np.float32)
+                         + rng.normal(0, 15, (256, 256, 1)), 0, 255).astype(_np.uint8)
+            tp = os.path.join(RENDER_DIR, "belt_grain.png").replace("\\", "/")
+            _Img.fromarray(_np.repeat(g, 3, axis=2)).save(tp)
+            rd = UsdShade.Shader.Define(stage, "/World/Look/Belt/ST")
+            rd.CreateIdAttr("UsdPrimvarReader_float2")
+            rd.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+            tx = UsdShade.Shader.Define(stage, "/World/Look/Belt/Tex")
+            tx.CreateIdAttr("UsdUVTexture")
+            tx.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(tp)
+            tx.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set("repeat")
+            tx.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set("repeat")
+            tx.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(
+                rd.CreateOutput("result", Sdf.ValueTypeNames.Float2))
+            bsh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+                tx.CreateOutput("rgb", Sdf.ValueTypeNames.Float3))
+            skin = UsdGeom.Mesh.Define(stage, "/World/Polish/SrcSkin")   # UV'd top so grain maps
+            hx, y0, hy, z = cs.BELT_LEN / 2, cs.SRC_Y, 0.16, cs.SRC_TOP + 0.002
+            skin.CreatePointsAttr([(-hx, y0 - hy, z), (hx, y0 - hy, z),
+                                   (hx, y0 + hy, z), (-hx, y0 + hy, z)])
+            skin.CreateFaceVertexCountsAttr([4])
+            skin.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+            UsdGeom.PrimvarsAPI(skin).CreatePrimvar(
+                "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.varying).Set(
+                [(0, 0), (12, 0), (12, 2), (0, 2)])
+            bind(skin.GetPrim(), brown)
+        except Exception as exc:
+            print(f"[cell] belt grain skipped ({exc})")
+
+    def slab(path, size, pos, color, m=steel):
         c = UsdGeom.Cube.Define(stage, path)
         c.CreateSizeAttr(1.0)
         c.AddTransformOp().Set(Gf.Matrix4d().SetScale(Gf.Vec3d(*size))
                                * Gf.Matrix4d().SetTranslate(Gf.Vec3d(*pos)))
         c.CreateDisplayColorAttr([Gf.Vec3f(*color)])
-        if metal:
-            bind(c.GetPrim())
+        if m is not None:
+            bind(c.GetPrim(), m)
 
     L, W = cs.FR_L, cs.FR_W
-    slab("/World/Polish/Base",      (L + 0.5, W + 0.5, 0.10), (0.0, 0.0, -0.05), (0.13, 0.14, 0.16), metal=False)
+    slab("/World/Polish/Base",      (L + 0.5, W + 0.5, 0.10), (0.0, 0.0, -0.05), (0.13, 0.14, 0.16), m=None)
     slab("/World/Polish/BackPanel", (L, 0.04, 1.45), (0.0, -W / 2.0 - 0.02, 0.83), (0.22, 0.24, 0.27))
     slab("/World/Polish/KickL",     (0.05, W, 0.30), (-L / 2.0 - 0.02, 0.0, 0.15), (0.17, 0.18, 0.21))
     slab("/World/Polish/KickR",     (0.05, W, 0.30), (L / 2.0 + 0.02, 0.0, 0.15), (0.17, 0.18, 0.21))
@@ -110,19 +151,22 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         print(f"[cell] polish skipped ({exc})")
 
     try:
-        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(450.0)
+        # diffused: soft ambient dome dominant, gentle wide-angle key (soft shadows)
+        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(900.0)
         key = UsdLux.DistantLight.Define(stage, "/World/Light_Key")
-        key.CreateIntensityAttr(3200.0)
-        key.CreateColorAttr(Gf.Vec3f(1.0, 0.95, 0.88))     # warm key
-        UsdGeom.Xformable(key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-50.0, 0.0, 35.0))
+        key.CreateIntensityAttr(500.0)
+        key.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.90))     # gently warm
+        key.CreateAngleAttr(6.0)                            # wide -> soft shadow edges
+        UsdGeom.Xformable(key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-55.0, 0.0, 30.0))
         fill = UsdLux.DistantLight.Define(stage, "/World/Light_Fill")
-        fill.CreateIntensityAttr(1300.0)
-        fill.CreateColorAttr(Gf.Vec3f(0.85, 0.90, 1.0))    # cool fill from the other side
-        UsdGeom.Xformable(fill.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-35.0, 0.0, -140.0))
+        fill.CreateIntensityAttr(300.0)
+        fill.CreateColorAttr(Gf.Vec3f(0.88, 0.92, 1.0))    # soft cool fill
+        fill.CreateAngleAttr(6.0)
+        UsdGeom.Xformable(fill.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-30.0, 0.0, -150.0))
     except Exception as exc:
         print(f"[cell] 3-point lights failed ({exc}); simple lights")
-        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
-        UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0)
+        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(800.0)
+        UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(600.0)
 
     plant = CellPlant()
     if ams == "mock":
