@@ -74,22 +74,35 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         ctrl, link = None, CellAdsLink(ams)
         print(f"[cell/plc] live TwinCAT AMS={ams}")
 
-    # -- phase 1: closed loop (fast), record snapshots + ADS latency ---------
-    n = int(sim_seconds / dt)
+    # -- phase 1: closed loop, record snapshots + ADS latency ----------------
+    # With the LIVE PLC, advance the sim in REAL time so the PLC's TON timers (the
+    # 300 ms tracking lock, phase dwells) line up with the sim's belt/part motion.
+    # A fixed dt with a fast ADS loop over-advances the sim per PLC tick, so a part
+    # leaves the pick window before the lock completes -> the robot never grips.
+    # The mock keeps a fixed dt (deterministic, matches the golden reference).
+    SNAP_DT = 0.06
     snaps, lat = [], []
-    for i in range(n):
+    sim_t, next_snap = 0.0, 0.0
+    prev = time.perf_counter()
+    while sim_t < sim_seconds:
         sensors = plant.read_sensors()
         t0 = time.perf_counter()
         if link is not None:
             link.write_sensors(sensors)
             cmds = link.read_commands()
+            lat.append((time.perf_counter() - t0) * 1000.0)
+            now = time.perf_counter()
+            rdt = min(max(now - prev, 0.001), 0.05)     # advance by REAL elapsed time
+            prev = now
         else:
-            cmds = ctrl.decide(sensors, dt)
-        lat.append((time.perf_counter() - t0) * 1000.0)
+            cmds = ctrl.decide(sensors, dt)             # mock: deterministic sim-time
+            rdt = dt
         plant.apply_commands(cmds)
-        plant.step(dt)
-        if i % sample_every == 0:
+        plant.step(rdt)
+        sim_t += rdt
+        if sim_t >= next_snap:
             snaps.append(snapshot(plant))
+            next_snap += SNAP_DT
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "
