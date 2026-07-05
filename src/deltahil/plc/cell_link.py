@@ -20,7 +20,9 @@ class CellAdsLink:
         self._pyads = _require_pyads()
         self._plc = self._pyads.Connection(ams_net_id, ams_port)
         self._plc.open()
-        self._cmd_names = [f"{G}.cA_tcp", f"{G}.cA_grip", f"{G}.cB_tcp", f"{G}.cB_grip"]
+        self._cmd_names = [f"{G}.cA_tcp", f"{G}.cA_grip", f"{G}.cB_tcp", f"{G}.cB_grip",
+                           f"{G}.enable"]
+        self._has_time = True          # read the PLC clock until proven absent
 
     # -- plant -> PLC : one sum-write of all sensor arrays (m -> mm) ----------
     def write_sensors(self, sensors: dict) -> None:
@@ -43,17 +45,27 @@ class CellAdsLink:
         }
         self._plc.write_list_by_name(d)
 
-    # -- PLC -> plant : one sum-read of the per-robot commands (mm -> m) ------
+    # -- PLC -> plant : one sum-read of commands (+ enable, + PLC clock) ------
     def read_commands(self):
-        """Returns (cmds, enable). enable=False (operator-forced) -> freeze."""
-        v = self._plc.read_list_by_name(self._cmd_names + [f"{G}.enable"])
+        """Returns (cmds, enable, plc_time_ns). plc_time_ns is the PLC's own clock
+        in ns (the sim derives dt from it); None if the PLC doesn't publish it ->
+        the caller falls back to the wall clock. enable=False -> freeze."""
+        names = self._cmd_names + ([f"{G}.plc_time_ns"] if self._has_time else [])
+        try:
+            v = self._plc.read_list_by_name(names)
+        except Exception:
+            if not self._has_time:
+                raise
+            self._has_time = False                       # clock symbol absent -> fall back
+            v = self._plc.read_list_by_name(self._cmd_names)
         cmds = {
             "Robot_A": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cA_tcp"]),
                         "grip": bool(v[f"{G}.cA_grip"])},
             "Robot_B": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cB_tcp"]),
                         "grip": bool(v[f"{G}.cB_grip"])},
         }
-        return cmds, bool(v[f"{G}.enable"])
+        plc_ns = int(v[f"{G}.plc_time_ns"]) if self._has_time else None
+        return cmds, bool(v[f"{G}.enable"]), plc_ns
 
     def close(self) -> None:
         try:

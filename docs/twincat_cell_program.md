@@ -38,6 +38,9 @@ VAR_GLOBAL
 
     // --- operator control (force this in the Watch window) ---
     enable : BOOL := TRUE;                // FALSE -> PLC holds + sim freezes; TRUE -> runs
+
+    // --- PLC clock published to the sim (nanoseconds) ---
+    plc_time_ns : ULINT;                  // sim derives its dt from THIS (its own clock)
 END_VAR
 ```
 
@@ -240,6 +243,18 @@ VAR
     rA : FB_CellRobot; rB : FB_CellRobot;
     claim_A : DINT := -1; claim_B : DINT := -1;
 END_VAR
+
+// Publish the PLC's own clock (ns) every cycle -- the sim advances its continuous
+// plant by the PLC-elapsed time between ADS samples (sampled-data: real-time
+// controller polling a continuous plant). Advanced ALWAYS (even when frozen); the
+// sim resets its delta each sample so a freeze doesn't cause a jump. Cycle-time
+// accumulator needs no extra library:
+GVL_Cell.plc_time_ns := GVL_Cell.plc_time_ns
+    + TO_ULINT(_TaskInfo[GETCURTASKINDEXEX()].CycleTime) * 100;   // CycleTime is in 100 ns units
+// Alternatives if that doesn't compile in your TC3: hardcode your task cycle, e.g.
+//   GVL_Cell.plc_time_ns := GVL_Cell.plc_time_ns + 1000000;   // for a 1 ms task (ns)
+// or publish a real clock: F_GetCurDcTickTime64() (Tc2_EtherCAT, ns, DC enabled) or
+// F_GetSystemTime(). Whatever you use, it MUST be in NANOSECONDS (the sim divides by 1e9).
 
 // Only run the robots while enabled. When GVL_Cell.enable is forced FALSE the FBs
 // aren't called, so their state + the cmd_* outputs hold -> the robots freeze

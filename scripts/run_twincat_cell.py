@@ -98,21 +98,30 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         # the sim motion; GVL_Cell.enable (forced in the Watch) gates all motion --
         # FALSE freezes the sim, TRUE runs it. Snapshots on wall-time so a freeze
         # shows in the render.
-        start = time.perf_counter(); prev = start
+        start = time.perf_counter(); prev = start; prev_plc = None; clock_src = "wall clock"
         while (time.perf_counter() - start) < sim_seconds:
             sensors = plant.read_sensors()
             t0 = time.perf_counter()
             link.write_sensors(sensors)
-            cmds, enable = link.read_commands()
+            cmds, enable, plc_ns = link.read_commands()
             lat.append((time.perf_counter() - t0) * 1000.0)
             now = time.perf_counter()
-            rdt = min(max(now - prev, 0.001), 0.05)
-            prev = now
+            # SAMPLED-DATA: advance the continuous plant by the PLC's OWN elapsed time
+            # between samples (one step per sample). Fall back to the wall clock if the
+            # PLC doesn't publish its clock.
+            if plc_ns is not None and prev_plc is not None:
+                rdt = (plc_ns - prev_plc) / 1.0e9
+                clock_src = "PLC clock (GVL_Cell.plc_time_ns)"
+            else:
+                rdt = now - prev
+            rdt = min(max(rdt, 0.001), 0.05)             # guard against ADS hiccups
+            prev, prev_plc = now, plc_ns
             plant.apply_commands(cmds)
             if enable:
                 plant.step(rdt)                          # frozen when the operator disables
             if (now - start) >= next_snap:
                 snaps.append(snapshot(plant)); next_snap += SNAP_DT
+        print(f"[cell] sim clock source: {clock_src}")
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "
