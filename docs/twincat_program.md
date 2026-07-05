@@ -33,48 +33,55 @@ END_VAR
 
 ## 2. MAIN (Structured Text) — run in a cyclic task
 
+Home/pick points are in the **robot-local frame** (mm) so they line up with the
+IRB 360 render (`scripts/run_twincat_render.py` uses the same numbers). The `dwell`
+timer holds each phase long enough that the motion is watchable in the render.
+
 ```iecst
 PROGRAM MAIN
 VAR
-    phase : INT := 0;                                  // 0 await 1 approach 2 grip 3 done
-    pick  : ARRAY[0..2] OF LREAL := [0.0, 0.0, -900.0]; // fixed pick point (mm), base frame
+    phase : INT := 0;                                     // 0 await 1 approach 2 grip 3 retract
+    home  : ARRAY[0..2] OF LREAL := [0.0, 0.0, -1010.0];  // raised home (mm, robot frame)
+    pick  : ARRAY[0..2] OF LREAL := [120.0, -80.0, -1180.0]; // pick point (mm, robot frame)
+    dwell : TON;                                          // per-phase dwell
     i     : INT;
 END_VAR
 
-// defaults each scan
 GVL_Cmd.tracking := FALSE;
 
 CASE phase OF
-    0:  // await part
-        FOR i := 0 TO 2 DO GVL_Cmd.target_xyz[i] := 0.0; END_FOR
+    0:  // await part -- sit at home
+        FOR i := 0 TO 2 DO GVL_Cmd.target_xyz[i] := home[i]; END_FOR
         GVL_Cmd.grip := FALSE;
+        dwell(IN := FALSE);
         IF GVL_Sensor.part_present THEN phase := 1; END_IF
 
-    1:  // approach: command the calibrated pick point, grip open
-        FOR i := 0 TO 2 DO
-            GVL_Cmd.target_xyz[i] := pick[i] + GVL_Sup.calib_offset_xyz[i];
-        END_FOR
+    1:  // approach: move to the calibrated pick point, grip open
+        FOR i := 0 TO 2 DO GVL_Cmd.target_xyz[i] := pick[i] + GVL_Sup.calib_offset_xyz[i]; END_FOR
         GVL_Cmd.grip := FALSE;
-        phase := 2;
+        dwell(IN := TRUE, PT := T#3S);
+        IF dwell.Q THEN phase := 2; dwell(IN := FALSE); END_IF
 
-    2:  // grip: hold target, close gripper, wait for confirm
-        FOR i := 0 TO 2 DO
-            GVL_Cmd.target_xyz[i] := pick[i] + GVL_Sup.calib_offset_xyz[i];
-        END_FOR
+    2:  // grip: hold on the part, close, wait for confirm (+dwell)
+        FOR i := 0 TO 2 DO GVL_Cmd.target_xyz[i] := pick[i] + GVL_Sup.calib_offset_xyz[i]; END_FOR
         GVL_Cmd.grip := TRUE;
-        IF GVL_Sensor.grip_confirm THEN
+        dwell(IN := TRUE, PT := T#2S);
+        IF GVL_Sensor.grip_confirm AND dwell.Q THEN
             GVL_Sup.cycle_count := GVL_Sup.cycle_count + 1;
-            phase := 3;
+            phase := 3; dwell(IN := FALSE);
         END_IF
 
-    3:  // done: release, then look for the next part
+    3:  // retract to home, then look for the next part
+        FOR i := 0 TO 2 DO GVL_Cmd.target_xyz[i] := home[i]; END_FOR
         GVL_Cmd.grip := FALSE;
-        phase := 0;
+        dwell(IN := TRUE, PT := T#3S);
+        IF dwell.Q THEN phase := 0; dwell(IN := FALSE); END_IF
 END_CASE
 ```
 
-Set the cyclic task to ~1–4 ms if you want the eval-5 timing regime; for a first
-connectivity test any task rate is fine. Activate the configuration and run.
+Set the cyclic task to ~1–4 ms for the eval-5 timing regime (the dwell is real-time,
+independent of task rate). Activate the configuration and run. For a pure connectivity
+check the dwell just makes the cycle count climb slowly — that's fine.
 
 ## 3. Bring-up (on the rig, where TwinCAT runs)
 
