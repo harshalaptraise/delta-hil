@@ -40,6 +40,13 @@ END_VAR
 
 ## 2. FB_CellRobot — one robot's tracking state machine
 
+> **Paste note:** the `FUNCTION_BLOCK FB_CellRobot` header line below MUST be present
+> in the POU's declaration pane. If you paste the `VAR … END_VAR` blocks without it
+> (or overwrite the auto-generated header), TwinCAT has no POU to bind the variables
+> to and every identifier — `ptmr`, `gx`, `box_id`, … — reports "not defined."
+> Declaration pane = `FUNCTION_BLOCK` header + all `VAR`/`VAR CONSTANT` blocks;
+> implementation pane = only the code after the last `END_VAR`.
+
 ```iecst
 FUNCTION_BLOCK FB_CellRobot
 VAR_INPUT
