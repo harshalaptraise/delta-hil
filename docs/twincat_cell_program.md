@@ -35,6 +35,9 @@ VAR_GLOBAL
     cA_grip : BOOL;
     cB_tcp : ARRAY[0..2] OF LREAL;
     cB_grip : BOOL;
+
+    // --- operator control (force this in the Watch window) ---
+    enable : BOOL := TRUE;                // FALSE -> PLC holds + sim freezes; TRUE -> runs
 END_VAR
 ```
 
@@ -238,16 +241,21 @@ VAR
     claim_A : DINT := -1; claim_B : DINT := -1;
 END_VAR
 
-// A (upstream) runs first so B sees A's fresh claim
-rA(rx := -700.0, upstream := TRUE,  grip_confirm := GVL_Cell.rA_confirm,
-   other_claim := claim_B, my_claim := claim_A);
-rB(rx := 700.0,  upstream := FALSE, grip_confirm := GVL_Cell.rB_confirm,
-   other_claim := claim_A, my_claim := claim_B);
+// Only run the robots while enabled. When GVL_Cell.enable is forced FALSE the FBs
+// aren't called, so their state + the cmd_* outputs hold -> the robots freeze
+// (and the sim freezes its belts too). Force it TRUE again to resume.
+IF GVL_Cell.enable THEN
+    // A (upstream) runs first so B sees A's fresh claim
+    rA(rx := -700.0, upstream := TRUE,  grip_confirm := GVL_Cell.rA_confirm,
+       other_claim := claim_B, my_claim := claim_A);
+    rB(rx := 700.0,  upstream := FALSE, grip_confirm := GVL_Cell.rB_confirm,
+       other_claim := claim_A, my_claim := claim_B);
 
-GVL_Cell.cA_tcp[0] := rA.cmd_x; GVL_Cell.cA_tcp[1] := rA.cmd_y; GVL_Cell.cA_tcp[2] := rA.cmd_z;
-GVL_Cell.cA_grip := rA.cmd_grip;
-GVL_Cell.cB_tcp[0] := rB.cmd_x; GVL_Cell.cB_tcp[1] := rB.cmd_y; GVL_Cell.cB_tcp[2] := rB.cmd_z;
-GVL_Cell.cB_grip := rB.cmd_grip;
+    GVL_Cell.cA_tcp[0] := rA.cmd_x; GVL_Cell.cA_tcp[1] := rA.cmd_y; GVL_Cell.cA_tcp[2] := rA.cmd_z;
+    GVL_Cell.cA_grip := rA.cmd_grip;
+    GVL_Cell.cB_tcp[0] := rB.cmd_x; GVL_Cell.cB_tcp[1] := rB.cmd_y; GVL_Cell.cB_tcp[2] := rB.cmd_z;
+    GVL_Cell.cB_grip := rB.cmd_grip;
+END_IF
 ```
 
 Run in the cyclic task (~1–4 ms for the eval-5 regime). Activate + Run, then on the

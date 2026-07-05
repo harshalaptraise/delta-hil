@@ -44,14 +44,16 @@ class CellAdsLink:
         self._plc.write_list_by_name(d)
 
     # -- PLC -> plant : one sum-read of the per-robot commands (mm -> m) ------
-    def read_commands(self) -> dict:
-        v = self._plc.read_list_by_name(self._cmd_names)
-        return {
+    def read_commands(self):
+        """Returns (cmds, enable). enable=False (operator-forced) -> freeze."""
+        v = self._plc.read_list_by_name(self._cmd_names + [f"{G}.enable"])
+        cmds = {
             "Robot_A": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cA_tcp"]),
                         "grip": bool(v[f"{G}.cA_grip"])},
             "Robot_B": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cB_tcp"]),
                         "grip": bool(v[f"{G}.cB_grip"])},
         }
+        return cmds, bool(v[f"{G}.enable"])
 
     def close(self) -> None:
         try:

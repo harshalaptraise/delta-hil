@@ -82,27 +82,37 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
     # The mock keeps a fixed dt (deterministic, matches the golden reference).
     SNAP_DT = 0.06
     snaps, lat = [], []
-    sim_t, next_snap = 0.0, 0.0
-    prev = time.perf_counter()
-    while sim_t < sim_seconds:
-        sensors = plant.read_sensors()
-        t0 = time.perf_counter()
-        if link is not None:
+    next_snap = 0.0
+    if link is None:
+        # mock: deterministic sim-time (matches the golden reference), always enabled
+        sim_t = 0.0
+        while sim_t < sim_seconds:
+            sensors = plant.read_sensors()
+            plant.apply_commands(ctrl.decide(sensors, dt))
+            plant.step(dt)
+            sim_t += dt
+            if sim_t >= next_snap:
+                snaps.append(snapshot(plant)); next_snap += SNAP_DT
+    else:
+        # live PLC: run in REAL wall-clock time so the PLC's TON timers line up with
+        # the sim motion; GVL_Cell.enable (forced in the Watch) gates all motion --
+        # FALSE freezes the sim, TRUE runs it. Snapshots on wall-time so a freeze
+        # shows in the render.
+        start = time.perf_counter(); prev = start
+        while (time.perf_counter() - start) < sim_seconds:
+            sensors = plant.read_sensors()
+            t0 = time.perf_counter()
             link.write_sensors(sensors)
-            cmds = link.read_commands()
+            cmds, enable = link.read_commands()
             lat.append((time.perf_counter() - t0) * 1000.0)
             now = time.perf_counter()
-            rdt = min(max(now - prev, 0.001), 0.05)     # advance by REAL elapsed time
+            rdt = min(max(now - prev, 0.001), 0.05)
             prev = now
-        else:
-            cmds = ctrl.decide(sensors, dt)             # mock: deterministic sim-time
-            rdt = dt
-        plant.apply_commands(cmds)
-        plant.step(rdt)
-        sim_t += rdt
-        if sim_t >= next_snap:
-            snaps.append(snapshot(plant))
-            next_snap += SNAP_DT
+            plant.apply_commands(cmds)
+            if enable:
+                plant.step(rdt)                          # frozen when the operator disables
+            if (now - start) >= next_snap:
+                snaps.append(snapshot(plant)); next_snap += SNAP_DT
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "
