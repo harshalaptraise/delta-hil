@@ -204,8 +204,6 @@ IF lat > REACH THEN cmd_x := rx + dx * REACH / lat; cmd_y := dy * REACH / lat; E
 cmd_z := LIMIT(Z_MIN, cmd_z, Z_MAX);
 ```
 
-`LREAL_TO_LREAL(bfill)` above is shorthand — use `DINT_TO_LREAL(bfill)`.
-
 ## 3. MAIN
 
 ```iecst
