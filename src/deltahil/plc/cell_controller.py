@@ -14,8 +14,8 @@ from __future__ import annotations
 import numpy as np
 
 from ..plant import cell_scene as cs
-from ..plant.cell_plant import (HOME_Z, PICK_Z, REACH_XY, STACK0, THICK,
-                                 Z_MAX, Z_MIN)
+from ..plant.cell_plant import (GRIP_OFFSET, HOME_Z, PICK_Z, REACH_XY, STACK0,
+                                 THICK, Z_MAX, Z_MIN)
 
 PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
@@ -153,7 +153,7 @@ class MockCellController:
                 # descend timer runs ONLY while the tote is in the window, so we never
                 # release before the TCP has actually gone down into the tote
                 s["place_t"] = s.get("place_t", 0.0) + dt
-                stack_z = STACK0 + fill * THICK
+                stack_z = STACK0 + fill * THICK + GRIP_OFFSET   # gripper drops it AT stack level
                 grip = s["place_t"] < 0.35                 # descend fully, THEN release
                 if not gc:                                 # placed -> done
                     s.update(phase="retract", t=0.0)

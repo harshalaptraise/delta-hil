@@ -96,13 +96,14 @@ VAR CONSTANT
     REACH     : LREAL := 170.0;
     Z_MIN     : LREAL := 100.0;
     Z_MAX     : LREAL := 600.0;
-    HOME_Z    : LREAL := 420.0;
-    PICK_Z    : LREAL := 480.0;
+    HOME_Z    : LREAL := 550.0;  // rest ABOVE the belt top (460) so the plate never sits in it
+    PICK_Z    : LREAL := 500.0;  // gripper just kisses the tortilla top (480) = 480 + GRIP_OFFSET
     PICK_HI   : LREAL := 580.0;
     BOX_Y     : LREAL := 150.0;
     PLACE_HI  : LREAL := 460.0;
     STACK0    : LREAL := 180.0;
     THICK     : LREAL := 14.0;
+    GRIP_OFFSET : LREAL := 20.0; // held tortilla hangs 20 mm below the TCP (kiss, no penetrate)
     LOCK_TIME : TIME  := T#300MS; // tracking-lock dwell (could be a GVL input)
 END_VAR
 
@@ -216,7 +217,7 @@ CASE phase OF
         cmd_x := rx; cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;   // no tote -> HOLD, never abandon
     ELSIF ABS(bx - rx) < WIN THEN
         plctmr(IN := TRUE, PT := T#5S);                     // descend timer (only while tote in-window)
-        cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + DINT_TO_LREAL(bfill) * THICK;
+        cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + DINT_TO_LREAL(bfill) * THICK + GRIP_OFFSET;
         IF plctmr.ET < T#350MS THEN cmd_grip := TRUE; ELSE cmd_grip := FALSE; END_IF
         IF NOT grip_confirm THEN phase := 5; END_IF         // placed
     ELSE

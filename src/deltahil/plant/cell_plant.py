@@ -33,10 +33,11 @@ PLACE_VEL_TOL = 0.40            # m/s (you drop it in; no tight velocity lock ne
 REACH_XY = 0.17                 # m   clean lateral reach (matches the 0.08 track window at the
                                 #     0.15 m belt lane -> no arm over-stretch)
 Z_MIN, Z_MAX = 0.10, 0.60       # m   vertical reach envelope (world)
-PICK_Z = cs.PART_Z              # tortilla top on the product belt
+GRIP_OFFSET = 0.02             # m   held tortilla hangs this far below the TCP (kiss, no penetrate)
+PICK_Z = cs.PART_Z + GRIP_OFFSET  # plate stops so the gripper just kisses the tortilla top
 STACK0 = cs.BOX_TOP + 0.02      # first tortilla height inside a tote
 THICK = 0.014
-HOME_Z = 0.42
+HOME_Z = 0.55                  # rest ABOVE the belt top (0.46) so the plate never sits in the belt
 XL = -cs.BELT_LEN / 2 - 0.15    # belt entry (m)
 XR = cs.BELT_LEN / 2 + 0.05     # belt exit (m)
 
@@ -47,7 +48,7 @@ def _home(rx):
 
 class CellPlant:
     def __init__(self, belt_v_src=0.22, belt_v_box=0.15,
-                 spawn_dt_s=2.6, box_dt_s=1.9, v_tcp=1.3, seed=7):
+                 spawn_dt_s=3.4, box_dt_s=1.9, v_tcp=1.3, seed=7):
         self.vs = float(belt_v_src)          # product belt velocity (m/s, +X)
         self.vb = float(belt_v_box)          # box belt velocity
         self.v_tcp = float(v_tcp)            # max TCP speed (m/s) -> smooth, fast motion
@@ -127,9 +128,9 @@ class CellPlant:
             if rb["carry"] is None:
                 if rb["cmd_grip"]:
                     self._try_grab(name, rb, tcp_vel, belt_v)
-            else:                                # carrying -> the part rides the TCP
+            else:                                # carrying -> the part hangs below the TCP
                 p = rb["carry"]
-                p["x"], p["y"], p["z"] = rb["tcp"][0], rb["tcp"][1], rb["tcp"][2]
+                p["x"], p["y"], p["z"] = rb["tcp"][0], rb["tcp"][1], rb["tcp"][2] - GRIP_OFFSET
                 if not rb["cmd_grip"]:           # release -> place if over a tracked box
                     self._release(rb, tcp_vel, box_v)
 
@@ -155,7 +156,8 @@ class CellPlant:
             if p["state"] != "belt":
                 continue
             ppos = np.array([p["x"], p["y"], cs.PART_Z])
-            pos_ok = np.linalg.norm(rb["tcp"] - ppos) < GRIP_TOL
+            gripper = rb["tcp"] - np.array([0.0, 0.0, GRIP_OFFSET])  # grasp at the gripper, not plate centre
+            pos_ok = np.linalg.norm(gripper - ppos) < GRIP_TOL
             vel_ok = np.linalg.norm(tcp_vel - belt_v) < VEL_TOL     # P2 velocity match
             if pos_ok and vel_ok:
                 p["state"] = "carried"

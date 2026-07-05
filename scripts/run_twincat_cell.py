@@ -85,6 +85,14 @@ def _polish(stage):
     brown, bsh = pbr("/World/Look/Belt", (0.42, 0.30, 0.19), 0.0, 0.92)
     src = stage.GetPrimAtPath("/World/SrcConveyor")
     if src.IsValid():
+        try:                                               # narrow the belt (top height unchanged)
+            xf = UsdGeom.Xformable(src)
+            xf.ClearXformOpOrder()
+            xf.AddTransformOp().Set(
+                Gf.Matrix4d().SetScale(Gf.Vec3d(cs.BELT_LEN, 0.26, 0.14))
+                * Gf.Matrix4d().SetTranslate(Gf.Vec3d(0.0, cs.SRC_Y, cs.SRC_TOP - 0.07)))
+        except Exception:
+            pass
         bind(src, brown)
         try:
             import numpy as _np
@@ -107,7 +115,7 @@ def _polish(stage):
             bsh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
                 tx.CreateOutput("rgb", Sdf.ValueTypeNames.Float3))
             skin = UsdGeom.Mesh.Define(stage, "/World/Polish/SrcSkin")   # UV'd top so grain maps
-            hx, y0, hy, z = cs.BELT_LEN / 2, cs.SRC_Y, 0.16, cs.SRC_TOP + 0.002
+            hx, y0, hy, z = cs.BELT_LEN / 2, cs.SRC_Y, 0.12, cs.SRC_TOP + 0.002
             skin.CreatePointsAttr([(-hx, y0 - hy, z), (hx, y0 - hy, z),
                                    (hx, y0 + hy, z), (-hx, y0 + hy, z)])
             skin.CreateFaceVertexCountsAttr([4])
