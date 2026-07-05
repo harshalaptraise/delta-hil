@@ -173,20 +173,21 @@ class TwinCATAdsLink:
                 "real": p.PLCTYPE_LREAL, "vec3": p.PLCTYPE_LREAL * 3}[kind]
 
     def read_commands(self, tier: Tier) -> dict:
-        out = {}
-        for t in ALL_TAGS:
-            if t.direction is Dir.PLC_TO_PLANT and t.tier is tier:
-                v = self._plc.read_by_name(symbol_for(t.name), self._plctype(t.kind))
-                out[t.name] = _decode(t.kind, v)
-        return out
+        # one ADS sum-read for all command symbols on this tier (not one per tag)
+        tags = [t for t in ALL_TAGS
+                if t.direction is Dir.PLC_TO_PLANT and t.tier is tier]
+        vals = self._plc.read_list_by_name([symbol_for(t.name) for t in tags])
+        return {t.name: _decode(t.kind, vals[symbol_for(t.name)]) for t in tags}
 
     def write_sensors(self, tier: Tier, values: dict) -> None:
+        # one ADS sum-write for all sensor symbols
+        out = {}
         for name, value in values.items():
             tag = _TAG_BY_NAME.get(name)
-            if tag is None or tag.direction is not Dir.PLANT_TO_PLC:
-                continue
-            self._plc.write_by_name(symbol_for(name), _encode(tag.kind, value),
-                                    self._plctype(tag.kind))
+            if tag is not None and tag.direction is Dir.PLANT_TO_PLC:
+                out[symbol_for(name)] = _encode(tag.kind, value)
+        if out:
+            self._plc.write_list_by_name(out)
 
     def scan(self, dt: float) -> None:
         return None                      # PLC free-runs on its own task (P1)
