@@ -46,7 +46,7 @@ def _home(rx):
 
 class CellPlant:
     def __init__(self, belt_v_src=0.22, belt_v_box=0.15,
-                 spawn_dt_s=2.6, box_dt_s=1.3, v_tcp=1.3, seed=7):
+                 spawn_dt_s=2.6, box_dt_s=2.6, v_tcp=1.3, seed=7):
         self.vs = float(belt_v_src)          # product belt velocity (m/s, +X)
         self.vb = float(belt_v_box)          # box belt velocity
         self.v_tcp = float(v_tcp)            # max TCP speed (m/s) -> smooth, fast motion

@@ -51,7 +51,7 @@ def snapshot(plant):
     }
 
 
-def main(ams, sim_seconds=36.0, dt=0.01, sample_every=6):
+def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
     omni.usd.get_context().new_stage()
     stage = omni.usd.get_context().get_stage()
     bases = cs.build_cell(stage, IRB360)
@@ -154,10 +154,10 @@ def main(ams, sim_seconds=36.0, dt=0.01, sample_every=6):
         try:
             pal = imgs[len(imgs) // 2].convert("P", palette=Image.ADAPTIVE, colors=128)
             fp = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in imgs]
-            fp[0].save(OUT_GIF, save_all=True, append_images=fp[1:], duration=90, loop=0, disposal=2)
+            fp[0].save(OUT_GIF, save_all=True, append_images=fp[1:], duration=70, loop=0, disposal=2)
         except Exception as exc:
             print(f"[cell] palette quantize failed ({exc}); saving RGB gif")
-            imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=90, loop=0)
+            imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=70, loop=0)
         print(f"\n[cell] wrote {OUT_GIF}  exists={os.path.exists(OUT_GIF)}  frames={len(imgs)}\n")
     else:
         print("\n[cell] no frames captured\n")
@@ -172,5 +172,5 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("usage: python scripts/run_twincat_cell.py <AMS_NET_ID|mock> [sim_seconds]")
         raise SystemExit(2)
-    secs = float(sys.argv[2]) if len(sys.argv) > 2 else 18.0
+    secs = float(sys.argv[2]) if len(sys.argv) > 2 else 50.0
     main(sys.argv[1], secs)
