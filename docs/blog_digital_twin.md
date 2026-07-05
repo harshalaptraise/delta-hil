@@ -16,6 +16,18 @@ I built this over a single day by directing an AI collaborator — I set the con
   Your browser does not support the video tag.
 </video>
 
+## Principles before code
+
+We did not start by writing code. We started by arguing about what could not be violated.
+
+Before the first line, we ran a short pre-flight — a calibration. Name the domain's first principles: the handful of irreducible truths the whole thing rests on, each a one-line invariant with a one-line justification. Not best practices, not conventions — the things that, if broken, mean the result is wrong no matter how convincing it looks. For this cell they were things like: *the controller decides and the plant only senses and actuates*; *a grasp is real only if the tool coincides with the part in position and velocity*; *tracking error grows with loop latency*; *every part is conserved — none teleports or vanishes*.
+
+Then I approved them, deliberately, as a constitution for the session. And only from those approved principles did we derive the evals — the concrete, checkable pass/fail tests that would decide whether "done" was actually true. No reach command outside the measured envelope. A grasp accepted only on position-and-velocity coincidence. A ledger where parts in equals parts picked plus parts passed. A control loop under ten milliseconds. Each eval traced back to a named principle; nothing was on the list because it felt right.
+
+This sounds like ceremony. It is the opposite. **The hard part of working with an AI is not getting it to write code — it is defining "correct" precisely enough that neither of you can drift.** A model will cheerfully optimize toward whatever target it infers, and if the target is "make it look good," it will make it look good and hide the seams. Drawing the measuring stick *before* the work — agreeing the invariants and the pass/fail bar first — is what turns a generative tool into an engineering collaborator. It gives the model a fixed thing to be right about, and it gives you a fixed thing to check.
+
+Much later in that same day, when we quietly widened a reach window or changed a belt speed, we re-ran those same evals every time. The measuring stick never moved. That is the only reason the changes stayed honest, and it is the part of this I would carry to any project, robot or not.
+
 ## The journey, in feedback
 
 I did not hand over a spec. I handed over a direction — *a high-fidelity delta robot talking to a PLC in a real-time simulation* — and then I steered, one render at a time.

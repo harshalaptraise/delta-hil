@@ -81,8 +81,8 @@ def _polish(stage):
         if nm.startswith("Frame") or nm.startswith("Mount"):
             bind(prim, steel)
 
-    # --- source (tortilla) belt -> light brown, matte, with a little real grain ---
-    brown, bsh = pbr("/World/Look/Belt", (0.72, 0.58, 0.40), 0.0, 0.92)
+    # --- source (tortilla) belt -> brown, matte, with a little real grain ---
+    brown, bsh = pbr("/World/Look/Belt", (0.42, 0.30, 0.19), 0.0, 0.92)
     src = stage.GetPrimAtPath("/World/SrcConveyor")
     if src.IsValid():
         bind(src, brown)
@@ -90,8 +90,8 @@ def _polish(stage):
             import numpy as _np
             from PIL import Image as _Img
             rng = _np.random.default_rng(3)
-            g = _np.clip(_np.array([184, 148, 102], _np.float32)
-                         + rng.normal(0, 15, (256, 256, 1)), 0, 255).astype(_np.uint8)
+            g = _np.clip(_np.array([107, 77, 48], _np.float32)
+                         + rng.normal(0, 14, (256, 256, 1)), 0, 255).astype(_np.uint8)
             tp = os.path.join(RENDER_DIR, "belt_grain.png").replace("\\", "/")
             _Img.fromarray(_np.repeat(g, 3, axis=2)).save(tp)
             rd = UsdShade.Shader.Define(stage, "/World/Look/Belt/ST")
@@ -141,6 +141,9 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
     bases = cs.build_cell(stage, IRB360)
     for i in range(N_TORT):
         cs.spawn_tortilla(stage, f"/World/CT_{i}", HIDE)
+        pr = stage.GetPrimAtPath(f"/World/CT_{i}")
+        if pr.IsValid():
+            UsdGeom.Gprim(pr).CreateDisplayColorAttr([Gf.Vec3f(0.93, 0.91, 0.86)])  # off-white
     for i in range(N_BOX):
         cs.spawn_box(stage, f"/World/CB_{i}", HIDE)
     for _ in range(60):
@@ -203,6 +206,7 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         # FALSE freezes the sim, TRUE runs it. Snapshots on wall-time so a freeze
         # shows in the render.
         start = time.perf_counter(); prev = start; prev_plc = None; clock_src = "wall clock"
+        seen_ids, ab = set(), {"Robot_A": 0, "Robot_B": 0}
         while (time.perf_counter() - start) < sim_seconds:
             sensors = plant.read_sensors()
             t0 = time.perf_counter()
@@ -211,8 +215,7 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
             lat.append((time.perf_counter() - t0) * 1000.0)
             now = time.perf_counter()
             # SAMPLED-DATA: advance the continuous plant by the PLC's OWN elapsed time
-            # between samples (one step per sample). Fall back to the wall clock if the
-            # PLC doesn't publish its clock.
+            # between samples. Fall back to the wall clock if the PLC doesn't publish it.
             if plc_ns is not None and prev_plc is not None:
                 rdt = min((plc_ns - prev_plc) / 1.0e9, 0.05)   # PLC clock; clamp MAX only
                 clock_src = "PLC clock (GVL_Cell.plc_time_ns)"  # rdt may be 0 (no new tick)
@@ -220,11 +223,20 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
                 rdt = min(max(now - prev, 0.001), 0.05)        # wall-clock fallback
             prev, prev_plc = now, plc_ns
             plant.apply_commands(cmds)
-            if enable and rdt > 0.0:                            # advance ONLY when time passed
-                plant.step(rdt)                                #   (no over-advance between ticks)
+            if enable and rdt > 0.0:
+                # sub-step the CONTINUOUS plant between (coarse) PLC ticks so fast
+                # tracking stays smooth -- the control sample rate is unchanged (one
+                # command per sample), only the plant integration is finer.
+                nsub = max(1, min(8, int(rdt / 0.003 + 0.5)))
+                for _ in range(nsub):
+                    plant.step(rdt / nsub)
+                for pt in plant.parts:                          # tally which robot picked
+                    if pt["state"] in ("carried", "placed") and pt["id"] not in seen_ids:
+                        seen_ids.add(pt["id"]); ab[pt["robot"]] += 1
             if (now - start) >= next_snap:
                 snaps.append(snapshot(plant)); next_snap += SNAP_DT
         print(f"[cell] sim clock source: {clock_src}")
+        print(f"[cell] per-robot picks  A/B = {ab['Robot_A']}/{ab['Robot_B']}")
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "
