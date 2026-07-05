@@ -44,9 +44,10 @@ def _home(rx):
 
 class CellPlant:
     def __init__(self, belt_v_src=0.22, belt_v_box=0.15,
-                 spawn_dt_s=2.5, box_dt_s=2.0, seed=7):
+                 spawn_dt_s=3.2, box_dt_s=2.4, v_tcp=1.3, seed=7):
         self.vs = float(belt_v_src)          # product belt velocity (m/s, +X)
         self.vb = float(belt_v_box)          # box belt velocity
+        self.v_tcp = float(v_tcp)            # max TCP speed (m/s) -> smooth, fast motion
         self.spawn_dt = float(spawn_dt_s)
         self.box_dt = float(box_dt_s)
         self._rng = np.random.default_rng(seed)
@@ -107,9 +108,15 @@ class CellPlant:
 
         belt_v = np.array([self.vs, 0.0, 0.0])
         box_v = np.array([self.vb, 0.0, 0.0])
+        max_step = self.v_tcp * dt
         for name, rb in self.robots.items():
             rb["tcp_prev"] = rb["tcp"].copy()
-            rb["tcp"] = rb["tcp"] + 0.5 * (rb["cmd_tcp"] - rb["tcp"])   # ease toward command
+            to = rb["cmd_tcp"] - rb["tcp"]            # constant-speed move -> smooth motion
+            d = float(np.linalg.norm(to))
+            if d <= max_step or d < 1e-9:
+                rb["tcp"] = rb["cmd_tcp"].copy()
+            else:
+                rb["tcp"] = rb["tcp"] + to * (max_step / d)
             tcp_vel = (rb["tcp"] - rb["tcp_prev"]) / dt if dt > 0 else np.zeros(3)
 
             if rb["carry"] is None:
