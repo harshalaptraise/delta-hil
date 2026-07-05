@@ -139,7 +139,7 @@ class MockCellController:
             s["box"] = nb
             bx, _fill = bmap[nb]
             if abs(bx - rx) < WIN and s["t"] > 0.15:
-                s.update(phase="place", t=0.0)
+                s.update(phase="place", t=0.0, place_t=0.0)   # fresh descend timer each place
             return (min(max(bx, rx - WIN), rx + WIN), cs.BOX_Y, PLACE_HI), True
 
         if ph == "place":
