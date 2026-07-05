@@ -19,7 +19,8 @@ from ..plant.cell_plant import (HOME_Z, PICK_Z, REACH_XY, STACK0, THICK,
 
 PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
-WIN = 0.08                 # reachable half-window in x at the belt lane
+WIN = 0.13                 # reachable half-window in x at the belt lane (wider -> the
+                           # robot tracks a moving part/tote across a longer window)
 CLAIM_LO, CLAIM_HI = 0.30, 0.02
 PHASE_TIMEOUT = 4.0        # s -- abort a stuck pick so nothing deadlocks
 PLACE_PATIENCE = 2.5       # s -- wait briefly for a tote, but don't starve picking
