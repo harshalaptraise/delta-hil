@@ -29,7 +29,8 @@ import omni.usd  # noqa: E402
 from pxr import Gf, UsdGeom, UsdLux  # noqa: E402
 
 from deltahil.plant import cell_scene as cs  # noqa: E402
-from deltahil.plant.cell_plant import CellPlant, STACK0, THICK  # noqa: E402
+from deltahil.plant.cell_plant import (BOX_TOP, BOX_Y, CellPlant, STACK0,  # noqa: E402
+                                        THICK)
 from deltahil.plant.irb360_pose import pose, world_to_local  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +42,7 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 N_TORT, N_BOX = 44, 16
 HIDE = (6.0, 4.0, -3.0)
 RES = (1600, 1000)      # HD render
-RT_SUB = 20             # RTX subframes/frame (higher -> cleaner)
+RT_SUB = 32             # RTX subframes/frame (higher -> less per-frame noise -> less flicker)
 
 
 def snapshot(plant):
@@ -135,6 +136,21 @@ def _polish(stage):
         c.CreateDisplayColorAttr([Gf.Vec3f(*color)])
         if m is not None:
             bind(c.GetPrim(), m)
+
+    # raise + narrow the box belt to match the logic (cell_scene frozen), + support posts
+    box = stage.GetPrimAtPath("/World/BoxConveyor")
+    if box.IsValid():
+        try:
+            xb = UsdGeom.Xformable(box)
+            xb.ClearXformOpOrder()
+            xb.AddTransformOp().Set(
+                Gf.Matrix4d().SetScale(Gf.Vec3d(cs.BELT_LEN, 0.30, 0.14))
+                * Gf.Matrix4d().SetTranslate(Gf.Vec3d(0.0, BOX_Y, BOX_TOP - 0.07)))
+        except Exception:
+            pass
+    for i, sx in enumerate((-1.1, 0.0, 1.1)):
+        slab(f"/World/Polish/BoxStand_{i}", (0.08, 0.08, BOX_TOP - 0.14),
+             (sx, BOX_Y, (BOX_TOP - 0.14) / 2.0), (0.10, 0.11, 0.13))
 
     L, W = cs.FR_L, cs.FR_W
     slab("/World/Polish/Base",      (L + 0.5, W + 0.5, 0.10), (0.0, 0.0, -0.05), (0.13, 0.14, 0.16), m=None)
@@ -261,7 +277,7 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
     rp = rep.create.render_product(cam, RES)
     rgb = rep.AnnotatorRegistry.get_annotator("rgb")
     rgb.attach([rp])
-    for _ in range(16):
+    for _ in range(24):                                    # longer warm-up -> denoiser settles
         rep.orchestrator.step(rt_subframes=RT_SUB)
 
     def capture():
@@ -295,7 +311,7 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
             if bid not in box_map and free_b:
                 box_map[bid] = free_b.pop(0)
             if bid in box_map:
-                cs.move_prim(stage, f"/World/CB_{box_map[bid]}", (bx, cs.BOX_Y, cs.BOX_TOP))
+                cs.move_prim(stage, f"/World/CB_{box_map[bid]}", (bx, BOX_Y, BOX_TOP))
         for bid in [k for k in box_map if k not in live_b]:
             cs.move_prim(stage, f"/World/CB_{box_map[bid]}", HIDE)
             free_b.append(box_map.pop(bid))

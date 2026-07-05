@@ -33,9 +33,12 @@ PLACE_VEL_TOL = 0.40            # m/s (you drop it in; no tight velocity lock ne
 REACH_XY = 0.17                 # m   clean lateral reach (matches the 0.08 track window at the
                                 #     0.15 m belt lane -> no arm over-stretch)
 Z_MIN, Z_MAX = 0.10, 0.60       # m   vertical reach envelope (world)
+BOX_Y = cs.BOX_Y               # m   box lane (kept: +Y beyond this over-stretches the arm)
+BOX_TOP = 0.34                 # m   RAISED box belt (cs 0.16) so a place happens higher and the
+                               #     forearms clear the tall source belt (0.46) instead of raking it
 GRIP_OFFSET = 0.02             # m   held tortilla hangs this far below the TCP (kiss, no penetrate)
 PICK_Z = cs.PART_Z + GRIP_OFFSET  # plate stops so the gripper just kisses the tortilla top
-STACK0 = cs.BOX_TOP + 0.02      # first tortilla height inside a tote
+STACK0 = BOX_TOP + 0.02        # first tortilla height inside a tote
 THICK = 0.014
 HOME_Z = 0.55                  # rest ABOVE the belt top (0.46) so the plate never sits in the belt
 XL = -cs.BELT_LEN / 2 - 0.15    # belt entry (m)
@@ -137,7 +140,7 @@ class CellPlant:
         for p in self.parts:                                # placed parts ride their box
             if p["state"] == "placed" and p["box"] is not None:
                 b = p["box"]
-                p["x"], p["y"], p["z"] = b["x"], cs.BOX_Y, STACK0 + p["slot"] * THICK
+                p["x"], p["y"], p["z"] = b["x"], BOX_Y, STACK0 + p["slot"] * THICK
 
         for p in list(self.parts):                          # belt-parts that ran off the end
             if p["state"] == "belt" and p["x"] > XR:

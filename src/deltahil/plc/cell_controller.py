@@ -14,11 +14,11 @@ from __future__ import annotations
 import numpy as np
 
 from ..plant import cell_scene as cs
-from ..plant.cell_plant import (GRIP_OFFSET, HOME_Z, PICK_Z, REACH_XY, STACK0,
-                                 THICK, Z_MAX, Z_MIN)
+from ..plant.cell_plant import (BOX_TOP, BOX_Y, GRIP_OFFSET, HOME_Z, PICK_Z,
+                                 REACH_XY, STACK0, THICK, Z_MAX, Z_MIN)
 
 PICK_HI = cs.PART_Z + 0.10
-PLACE_HI = cs.BOX_TOP + 0.30
+PLACE_HI = BOX_TOP + 0.14      # transfer height above the (raised) box belt, still in reach
 WIN = 0.08                 # reachable half-window in x -> the robot tracks a part/tote
                            # only within its clean reach (no over-stretch to its limits)
 CLAIM_LO, CLAIM_HI = 0.30, 0.02
@@ -136,18 +136,18 @@ class MockCellController:
             if s.get("box") not in bmap:                  # COMMIT to one tote; re-pick only if it's gone
                 s["box"] = self._nearest_box(rx, bmap)
             if s["box"] is None:
-                return (rx, cs.BOX_Y, PLACE_HI), True     # hold the part, wait for a tote
+                return (rx, BOX_Y, PLACE_HI), True     # hold the part, wait for a tote
             bx, _fill = bmap[s["box"]]
             if abs(bx - rx) < WIN and s["t"] > 0.15:
                 s.update(phase="place", t=0.0, place_t=0.0)   # fresh descend timer each place
-            return (min(max(bx, rx - WIN), rx + WIN), cs.BOX_Y, PLACE_HI), True
+            return (min(max(bx, rx - WIN), rx + WIN), BOX_Y, PLACE_HI), True
 
         if ph == "place":
             if s.get("box") not in bmap:                  # stay committed to the same tote
                 s["box"] = self._nearest_box(rx, bmap)
             if s["box"] is None:
                 s["place_t"] = 0.0
-                return (rx, cs.BOX_Y, PLACE_HI), True      # no tote -> HOLD and wait
+                return (rx, BOX_Y, PLACE_HI), True      # no tote -> HOLD and wait
             bx, fill = bmap[s["box"]]
             if abs(bx - rx) < WIN:
                 # descend timer runs ONLY while the tote is in the window, so we never
@@ -157,9 +157,9 @@ class MockCellController:
                 grip = s["place_t"] < 0.35                 # descend fully, THEN release
                 if not gc:                                 # placed -> done
                     s.update(phase="retract", t=0.0)
-                return (bx, cs.BOX_Y, stack_z), grip
+                return (bx, BOX_Y, stack_z), grip
             s["place_t"] = 0.0                             # tote drifted out -> wait again
-            return (min(max(bx, rx - WIN), rx + WIN), cs.BOX_Y, PLACE_HI), True
+            return (min(max(bx, rx - WIN), rx + WIN), BOX_Y, PLACE_HI), True
 
         # retract
         if s["t"] > 0.25:

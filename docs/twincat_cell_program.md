@@ -100,8 +100,8 @@ VAR CONSTANT
     PICK_Z    : LREAL := 500.0;  // gripper just kisses the tortilla top (480) = 480 + GRIP_OFFSET
     PICK_HI   : LREAL := 580.0;
     BOX_Y     : LREAL := 150.0;
-    PLACE_HI  : LREAL := 460.0;
-    STACK0    : LREAL := 180.0;
+    PLACE_HI  : LREAL := 480.0;  // transfer height above the RAISED box belt (340) + 140
+    STACK0    : LREAL := 360.0;  // box belt raised (was 180) so placing is higher -> legs clear
     THICK     : LREAL := 14.0;
     GRIP_OFFSET : LREAL := 20.0; // held tortilla hangs 20 mm below the TCP (kiss, no penetrate)
     LOCK_TIME : TIME  := T#300MS; // tracking-lock dwell (could be a GVL input)
