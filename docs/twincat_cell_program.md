@@ -55,24 +55,42 @@ VAR_OUTPUT
     cmd_x : LREAL; cmd_y : LREAL; cmd_z : LREAL; cmd_grip : BOOL;
 END_VAR
 VAR
-    phase      : INT := 0;   // 0 idle 1 track 2 lift 3 transfer 4 place 5 retract
+    phase      : INT := 0;    // 0 idle 1 track 2 lift 3 transfer 4 place 5 retract
     phase_prev : INT := 0;
     part       : DINT := -1;
-    gx : LREAL; gy : LREAL;
-    ptmr : TON; elapsed : TIME;
-    locktmr : TON;           // rides the moving part before gripping (tracking lock)
-    plctmr : TON;            // place descend timer (runs ONLY while the tote is in-window)
-    box_id : DINT := -1;     // committed tote id (place into ONE tote, no mid-flight switch)
-    i : INT; found : BOOL; boxfound : BOOL; bestd : LREAL;
-    px : LREAL; py : LREAL; bx : LREAL; bfill : DINT;
-    dx : LREAL; dy : LREAL; lat : LREAL;
+    gx         : LREAL;
+    gy         : LREAL;
+    ptmr       : TON;         // per-phase elapsed timer
+    elapsed    : TIME;
+    locktmr    : TON;         // tracking-lock dwell before gripping
+    plctmr     : TON;         // place descend timer (only while tote in-window)
+    box_id     : DINT := -1;  // committed tote id (one tote per place, no switch)
+    i          : INT;
+    found      : BOOL;
+    boxfound   : BOOL;
+    bestd      : LREAL;
+    px         : LREAL;
+    py         : LREAL;
+    bx         : LREAL;
+    bfill      : DINT;
+    dx         : LREAL;
+    dy         : LREAL;
+    lat        : LREAL;
 END_VAR
 VAR CONSTANT
-    WIN : LREAL := 80.0;  CLAIM_LO : LREAL := 300.0;   // track only within clean reach (no over-stretch)
-    REACH : LREAL := 170.0;  Z_MIN : LREAL := 100.0;  Z_MAX : LREAL := 600.0;
-    HOME_Z : LREAL := 420.0;  PICK_Z : LREAL := 480.0;  PICK_HI : LREAL := 580.0;
-    BOX_Y : LREAL := 150.0;  PLACE_HI : LREAL := 460.0;  STACK0 : LREAL := 180.0;  THICK : LREAL := 14.0;
-    LOCK_TIME : TIME := T#300MS;   // tracking-lock dwell (could be a GVL input)
+    WIN       : LREAL := 80.0;    // track only within clean reach (no over-stretch)
+    CLAIM_LO  : LREAL := 300.0;
+    REACH     : LREAL := 170.0;
+    Z_MIN     : LREAL := 100.0;
+    Z_MAX     : LREAL := 600.0;
+    HOME_Z    : LREAL := 420.0;
+    PICK_Z    : LREAL := 480.0;
+    PICK_HI   : LREAL := 580.0;
+    BOX_Y     : LREAL := 150.0;
+    PLACE_HI  : LREAL := 460.0;
+    STACK0    : LREAL := 180.0;
+    THICK     : LREAL := 14.0;
+    LOCK_TIME : TIME  := T#300MS; // tracking-lock dwell (could be a GVL input)
 END_VAR
 
 // per-phase elapsed time (resets the cycle after phase changes)
