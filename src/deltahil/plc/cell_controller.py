@@ -91,19 +91,19 @@ class MockCellController:
             ph = "retract"
 
         if ph == "idle":
+            # A (upstream) takes its share; B (downstream) takes its share + anything
+            # A left behind -> balanced. Claim any REACHABLE part (in the window too,
+            # not just upstream) so a free robot never watches a reachable part pass.
             best, bd = None, 1e9
             for pid, (x, y) in pmap.items():
                 if pid in claimed:
                     continue
-                # A (upstream) takes only its share; B (downstream) takes its share
-                # plus anything A left behind -> balanced load
                 if name == "Robot_A" and _pref(pid) != "Robot_A":
                     continue
-                # claim only UPSTREAM, catchable parts (runway to descend as it arrives)
-                if rx - CLAIM_LO <= x <= rx - 0.04 and abs(y) < REACH_XY:
+                if rx - CLAIM_LO <= x <= rx + WIN and abs(y) < REACH_XY:
                     if abs(x - rx) < bd:
                         bd, best = abs(x - rx), pid
-            if best is not None:                          # claim the part; find a box later
+            if best is not None:
                 s.update(phase="track", part=best, box=None, t=0.0, lock=0.0)
                 claimed.add(best)
             return home, False

@@ -91,7 +91,9 @@ CASE phase OF
         IF GVL_Cell.part_valid[i] AND (GVL_Cell.part_id[i] <> other_claim) THEN
             IF (NOT upstream) OR (GVL_Cell.part_id[i] MOD 2 = 0) THEN
                 px := GVL_Cell.part_x[i]; py := GVL_Cell.part_y[i];
-                IF (px >= rx - CLAIM_LO) AND (px <= rx - 40.0) AND (ABS(py) < REACH) THEN
+                // claim any REACHABLE part (upstream OR already in the window) so a
+                // free robot never watches a reachable part pass
+                IF (px >= rx - CLAIM_LO) AND (px <= rx + WIN) AND (ABS(py) < REACH) THEN
                     IF ABS(px - rx) < bestd THEN
                         bestd := ABS(px - rx); part := GVL_Cell.part_id[i]; found := TRUE;
                     END_IF
