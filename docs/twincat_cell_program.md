@@ -78,9 +78,9 @@ ptmr(IN := (phase = phase_prev), PT := T#30S);
 phase_prev := phase;
 elapsed := ptmr.ET;
 
-// anti-deadlock: pick phases give up quickly; carrying phases wait a bit for a tote
-IF (phase = 3 OR phase = 4) AND elapsed > T#2500MS THEN phase := 5;
-ELSIF phase <> 0 AND elapsed > T#4S THEN phase := 5; END_IF
+// only the pick chase gives up (a part slipped by before grabbing). Once a part is
+// GRABBED the robot NEVER abandons it -- carrying phases wait as long as needed.
+IF phase = 1 AND elapsed > T#4S THEN phase := 0; part := -1; my_claim := -1; END_IF
 
 CASE phase OF
 0:  // idle -- claim nearest upstream, catchable, un-claimed part in my share
@@ -161,9 +161,10 @@ CASE phase OF
             END_IF
         END_IF
     END_FOR
-    IF NOT boxfound THEN phase := 5;
+    IF NOT boxfound THEN
+        cmd_x := rx; cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;   // no tote -> HOLD, never abandon
     ELSIF ABS(bx - rx) < WIN THEN
-        cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + LREAL_TO_LREAL(bfill) * THICK;
+        cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + DINT_TO_LREAL(bfill) * THICK;
         IF elapsed < T#350MS THEN cmd_grip := TRUE; ELSE cmd_grip := FALSE; END_IF
         IF NOT grip_confirm THEN phase := 5; END_IF        // placed
     ELSE

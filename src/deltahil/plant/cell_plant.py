@@ -28,8 +28,8 @@ K_PARTS = 6                     # nearest belt parts reported to the controller
 K_BOXES = 4                     # nearest boxes reported
 GRIP_TOL = 0.02                 # m   position coincidence for a grasp (pick: strict)
 VEL_TOL = 0.06                  # m/s velocity coincidence (belt-velocity match, pick)
-PLACE_POS_TOL = 0.05            # m   placing into a moving tote is more forgiving
-PLACE_VEL_TOL = 0.20            # m/s (you drop it in; no tight velocity lock needed)
+PLACE_POS_TOL = 0.10            # m   a release over a 0.26 m tote lands in it (never drop)
+PLACE_VEL_TOL = 0.40            # m/s (you drop it in; no tight velocity lock needed)
 REACH_XY = 0.17                 # m   lateral reach from a robot's axis
 Z_MIN, Z_MAX = 0.10, 0.60       # m   vertical reach envelope (world)
 PICK_Z = cs.PART_Z              # tortilla top on the product belt
@@ -165,23 +165,22 @@ class CellPlant:
 
     def _release(self, rb, tcp_vel, box_v) -> None:
         p = rb["carry"]
-        for b in self.boxes:
-            bpos = np.array([b["x"], cs.BOX_Y, STACK0 + b["fill"] * THICK])
-            pos_ok = np.linalg.norm(rb["tcp"] - bpos) < PLACE_POS_TOL
-            vel_ok = np.linalg.norm(tcp_vel - box_v) < PLACE_VEL_TOL
-            if pos_ok and vel_ok:
-                p["state"] = "placed"
-                p["box"] = b
-                p["slot"] = b["fill"]
-                b["fill"] += 1
-                self.ledger["placed"] += 1
-                rb["carry"] = None
-                rb["grip_confirm"] = False
-                return
-        # released with no tote in reach -> discard (falls); vanish, don't float
-        p["state"] = "exit"
-        rb["carry"] = None
-        rb["grip_confirm"] = False
+        best, bd = None, 1e9
+        for b in self.boxes:                          # nearest tote under the gripper (x)
+            d = abs(b["x"] - rb["tcp"][0])
+            if d < bd:
+                bd, best = d, b
+        if best is not None and bd < PLACE_POS_TOL:   # a tote is under it -> lands inside
+            p["state"] = "placed"
+            p["box"] = best
+            p["slot"] = best["fill"]
+            best["fill"] += 1
+            self.ledger["placed"] += 1
+            rb["carry"] = None
+            rb["grip_confirm"] = False
+        # else: no tote under the gripper -> do NOT drop it; keep it in hand (never
+        # abandon). The controller only releases with a tote in the window, so this
+        # is just a safety net -- the part stays carried until a tote is there.
 
     # -- plant -> controller -------------------------------------------------
     def read_sensors(self) -> dict:

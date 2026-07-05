@@ -83,17 +83,16 @@ class MockCellController:
         home = (rx, 0.0, HOME_Z)
         ph = s["phase"]
 
-        # anti-deadlock: pick phases give up quickly; carrying phases wait patiently
-        # for a tote (holding the part) rather than dropping it
-        budget = PLACE_PATIENCE if ph in ("transfer", "place") else PHASE_TIMEOUT
-        if ph != "idle" and s["t"] > budget:
-            s.update(phase="retract", t=0.0)
-            ph = "retract"
+        # only the pick chase gives up (a part slipped by before grabbing). Once a
+        # part is GRABBED, the robot NEVER abandons it -- carrying phases wait as
+        # long as needed for a tote.
+        if ph == "track" and s["t"] > PHASE_TIMEOUT:
+            s.update(phase="idle", part=None, box=None)
+            ph = "idle"
 
         if ph == "idle":
-            # A (upstream) takes its share; B (downstream) takes its share + anything
-            # A left behind -> balanced. Claim any REACHABLE part (in the window too,
-            # not just upstream) so a free robot never watches a reachable part pass.
+            # A (upstream) SPLITS -- it claims only its share, leaving the rest for B.
+            # B (downstream) is greedy -- it claims any reachable part (the catch-all).
             best, bd = None, 1e9
             for pid, (x, y) in pmap.items():
                 if pid in claimed:
@@ -145,16 +144,20 @@ class MockCellController:
         if ph == "place":
             nb = self._nearest_box(rx, bmap)
             if nb is None:
-                s.update(phase="retract", t=0.0)
-                return home, False
+                s["place_t"] = 0.0
+                return (rx, cs.BOX_Y, PLACE_HI), True      # no tote -> HOLD and wait
             s["box"] = nb
             bx, fill = bmap[nb]
             if abs(bx - rx) < WIN:
+                # descend timer runs ONLY while the tote is in the window, so we never
+                # release before the TCP has actually gone down into the tote
+                s["place_t"] = s.get("place_t", 0.0) + dt
                 stack_z = STACK0 + fill * THICK
-                grip = s["t"] < 0.35                       # descend + hold, then release
+                grip = s["place_t"] < 0.35                 # descend fully, THEN release
                 if not gc:                                 # placed -> done
                     s.update(phase="retract", t=0.0)
                 return (bx, cs.BOX_Y, stack_z), grip
+            s["place_t"] = 0.0                             # tote drifted out -> wait again
             return (min(max(bx, rx - WIN), rx + WIN), cs.BOX_Y, PLACE_HI), True
 
         # retract
