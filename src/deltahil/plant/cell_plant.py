@@ -26,8 +26,10 @@ from . import cell_scene as cs
 # --- reported slots + coincidence/reach tolerances -------------------------
 K_PARTS = 6                     # nearest belt parts reported to the controller
 K_BOXES = 4                     # nearest boxes reported
-GRIP_TOL = 0.02                 # m   position coincidence for a grasp
-VEL_TOL = 0.06                  # m/s velocity coincidence (belt-velocity match)
+GRIP_TOL = 0.02                 # m   position coincidence for a grasp (pick: strict)
+VEL_TOL = 0.06                  # m/s velocity coincidence (belt-velocity match, pick)
+PLACE_POS_TOL = 0.05            # m   placing into a moving tote is more forgiving
+PLACE_VEL_TOL = 0.20            # m/s (you drop it in; no tight velocity lock needed)
 REACH_XY = 0.17                 # m   lateral reach from a robot's axis
 Z_MIN, Z_MAX = 0.10, 0.60       # m   vertical reach envelope (world)
 PICK_Z = cs.PART_Z              # tortilla top on the product belt
@@ -44,7 +46,7 @@ def _home(rx):
 
 class CellPlant:
     def __init__(self, belt_v_src=0.22, belt_v_box=0.15,
-                 spawn_dt_s=3.2, box_dt_s=2.4, v_tcp=1.3, seed=7):
+                 spawn_dt_s=2.6, box_dt_s=1.3, v_tcp=1.3, seed=7):
         self.vs = float(belt_v_src)          # product belt velocity (m/s, +X)
         self.vb = float(belt_v_box)          # box belt velocity
         self.v_tcp = float(v_tcp)            # max TCP speed (m/s) -> smooth, fast motion
@@ -95,7 +97,7 @@ class CellPlant:
             self._pid += 1
             self.ledger["spawned"] += 1
             self._next_part_t += self.spawn_dt
-        while self.t >= self._next_box_t:                   # spawn totes
+        while self.t >= self._next_box_t:                   # steady tote feed
             self.boxes.append({"id": self._bid, "x": XL, "fill": 0})
             self._bid += 1
             self._next_box_t += self.box_dt
@@ -165,8 +167,8 @@ class CellPlant:
         p = rb["carry"]
         for b in self.boxes:
             bpos = np.array([b["x"], cs.BOX_Y, STACK0 + b["fill"] * THICK])
-            pos_ok = np.linalg.norm(rb["tcp"] - bpos) < GRIP_TOL * 2
-            vel_ok = np.linalg.norm(tcp_vel - box_v) < VEL_TOL
+            pos_ok = np.linalg.norm(rb["tcp"] - bpos) < PLACE_POS_TOL
+            vel_ok = np.linalg.norm(tcp_vel - box_v) < PLACE_VEL_TOL
             if pos_ok and vel_ok:
                 p["state"] = "placed"
                 p["box"] = b
@@ -176,16 +178,22 @@ class CellPlant:
                 rb["carry"] = None
                 rb["grip_confirm"] = False
                 return
-        # released not over a tracked box -> drops onto the belt as a loose part
-        p["state"] = "placed"
-        p["box"] = None
-        self.ledger["placed"] += 1
+        # released with no tote in reach -> discard (falls); vanish, don't float
+        p["state"] = "exit"
         rb["carry"] = None
         rb["grip_confirm"] = False
 
     # -- plant -> controller -------------------------------------------------
     def read_sensors(self) -> dict:
-        belt = sorted((p for p in self.parts if p["state"] == "belt"), key=lambda p: p["x"])
+        # report the slots NEAREST the robots (not the left-most) so a dense belt
+        # doesn't hide the reachable parts/totes behind far-upstream ones
+        rxs = [rb["rx"] for rb in self.robots.values()]
+
+        def dmin(x):
+            return min(abs(x - rx) for rx in rxs)
+
+        belt = sorted((p for p in self.parts if p["state"] == "belt"),
+                      key=lambda p: dmin(p["x"]))[:K_PARTS]
         parts = []
         for k in range(K_PARTS):
             if k < len(belt):
@@ -194,7 +202,7 @@ class CellPlant:
             else:
                 parts.append((0, 0.0, 0.0, False))
         boxes = []
-        bsorted = sorted(self.boxes, key=lambda b: b["x"])
+        bsorted = sorted(self.boxes, key=lambda b: dmin(b["x"]))[:K_BOXES]
         for m in range(K_BOXES):
             if m < len(bsorted):
                 b = bsorted[m]

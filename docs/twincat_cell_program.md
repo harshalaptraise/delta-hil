@@ -60,6 +60,7 @@ VAR
     part       : DINT := -1;
     gx : LREAL; gy : LREAL;
     ptmr : TON; elapsed : TIME;
+    locktmr : TON;           // rides the moving part before gripping (tracking lock)
     i : INT; found : BOOL; boxfound : BOOL; bestd : LREAL;
     px : LREAL; py : LREAL; bx : LREAL; bfill : DINT;
     dx : LREAL; dy : LREAL; lat : LREAL;
@@ -69,6 +70,7 @@ VAR CONSTANT
     REACH : LREAL := 170.0;  Z_MIN : LREAL := 100.0;  Z_MAX : LREAL := 600.0;
     HOME_Z : LREAL := 420.0;  PICK_Z : LREAL := 480.0;  PICK_HI : LREAL := 580.0;
     BOX_Y : LREAL := 150.0;  PLACE_HI : LREAL := 460.0;  STACK0 : LREAL := 180.0;  THICK : LREAL := 14.0;
+    LOCK_TIME : TIME := T#300MS;   // tracking-lock dwell (could be a GVL input)
 END_VAR
 
 // per-phase elapsed time (resets the cycle after phase changes)
@@ -76,7 +78,9 @@ ptmr(IN := (phase = phase_prev), PT := T#30S);
 phase_prev := phase;
 elapsed := ptmr.ET;
 
-IF phase <> 0 AND elapsed > T#4S THEN phase := 5; END_IF   // anti-deadlock
+// anti-deadlock: pick phases give up quickly; carrying phases wait a bit for a tote
+IF (phase = 3 OR phase = 4) AND elapsed > T#2500MS THEN phase := 5;
+ELSIF phase <> 0 AND elapsed > T#4S THEN phase := 5; END_IF
 
 CASE phase OF
 0:  // idle -- claim nearest upstream, catchable, un-claimed part in my share
@@ -112,8 +116,12 @@ CASE phase OF
         ELSE
             gx := px; gy := py;
             IF ABS(px - rx) < WIN THEN
-                cmd_x := px; cmd_y := py; cmd_z := PICK_Z; cmd_grip := TRUE;   // track + descend + grip
+                // ride the moving part (velocity-matched) for LOCK_TIME, THEN grip
+                locktmr(IN := TRUE, PT := T#5S);
+                cmd_x := px; cmd_y := py; cmd_z := PICK_Z;
+                cmd_grip := (locktmr.ET >= LOCK_TIME);
             ELSE
+                locktmr(IN := FALSE);
                 IF px < rx THEN cmd_x := rx - WIN; ELSE cmd_x := rx + WIN; END_IF
                 cmd_y := py; cmd_z := PICK_HI; cmd_grip := FALSE;             // hover at window edge
             END_IF

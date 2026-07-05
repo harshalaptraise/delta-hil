@@ -21,7 +21,8 @@ PICK_HI = cs.PART_Z + 0.10
 PLACE_HI = cs.BOX_TOP + 0.30
 WIN = 0.08                 # reachable half-window in x at the belt lane
 CLAIM_LO, CLAIM_HI = 0.30, 0.02
-PHASE_TIMEOUT = 4.0        # s -- abort a stuck phase so nothing deadlocks
+PHASE_TIMEOUT = 4.0        # s -- abort a stuck pick so nothing deadlocks
+PLACE_PATIENCE = 2.5       # s -- wait briefly for a tote, but don't starve picking
 ROBOT_X = {name: rx for name, (rx, _, _) in cs.ROBOTS.items()}
 
 
@@ -41,8 +42,9 @@ def _clamp(tcp, rx):
 
 
 class MockCellController:
-    def __init__(self):
+    def __init__(self, lock_time=0.3):
         self.st = {}
+        self.lock_time = lock_time      # s the TCP rides the moving part before gripping
 
     def _state(self, name, rx):
         if name not in self.st:
@@ -56,10 +58,11 @@ class MockCellController:
     def _nearest_box(self, rx, bmap):
         best, bd = None, 1e9
         for bid, (bx, _fill) in bmap.items():
-            if bx <= rx + WIN + 0.5:                  # a box at/approaching my window
-                d = abs(bx - rx)
-                if d < bd:
-                    bd, best = d, bid
+            if bx > rx + WIN + 0.5:            # place into the nearest tote in reach
+                continue
+            d = abs(bx - rx)
+            if d < bd:
+                bd, best = d, bid
         return best
 
     def decide(self, sensors, dt):
@@ -72,15 +75,18 @@ class MockCellController:
             s = self._state(name, rx)
             s["t"] += dt
             gc = sensors["robots"][name]["grip_confirm"]
-            tcp, grip = self._robot(name, rx, s, pmap, bmap, gc, claimed)
+            tcp, grip = self._robot(name, rx, s, pmap, bmap, gc, claimed, dt)
             cmds[name] = {"tcp": _clamp(tcp, rx), "grip": grip}
         return cmds
 
-    def _robot(self, name, rx, s, pmap, bmap, gc, claimed):
+    def _robot(self, name, rx, s, pmap, bmap, gc, claimed, dt):
         home = (rx, 0.0, HOME_Z)
         ph = s["phase"]
 
-        if ph != "idle" and s["t"] > PHASE_TIMEOUT:       # anti-deadlock
+        # anti-deadlock: pick phases give up quickly; carrying phases wait patiently
+        # for a tote (holding the part) rather than dropping it
+        budget = PLACE_PATIENCE if ph in ("transfer", "place") else PHASE_TIMEOUT
+        if ph != "idle" and s["t"] > budget:
             s.update(phase="retract", t=0.0)
             ph = "retract"
 
@@ -98,7 +104,7 @@ class MockCellController:
                     if abs(x - rx) < bd:
                         bd, best = abs(x - rx), pid
             if best is not None:                          # claim the part; find a box later
-                s.update(phase="track", part=best, box=None, t=0.0)
+                s.update(phase="track", part=best, box=None, t=0.0, lock=0.0)
                 claimed.add(best)
             return home, False
 
@@ -114,8 +120,10 @@ class MockCellController:
                 s.update(phase="idle", part=None, box=None)
                 return home, False
             s["gx"], s["gy"] = x, y
-            if abs(x - rx) < WIN:                          # in window -> track + descend + grip
-                return (x, y, PICK_Z), True
+            if abs(x - rx) < WIN:                          # in window -> descend + RIDE with it
+                s["lock"] = s.get("lock", 0.0) + dt        # conveyor-tracking dwell (velocity-matched)
+                return (x, y, PICK_Z), s["lock"] >= self.lock_time   # grip only after the lock
+            s["lock"] = 0.0
             hx = rx - WIN if x < rx else rx + WIN          # else hover at window edge, ready
             return (hx, y, PICK_HI), False
 

@@ -51,7 +51,7 @@ def snapshot(plant):
     }
 
 
-def main(ams, sim_seconds=28.0, dt=0.01, sample_every=6):
+def main(ams, sim_seconds=36.0, dt=0.01, sample_every=6):
     omni.usd.get_context().new_stage()
     stage = omni.usd.get_context().get_stage()
     bases = cs.build_cell(stage, IRB360)
