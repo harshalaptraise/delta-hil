@@ -1,15 +1,13 @@
-"""Close the HIL loop against a live TwinCAT PLC via the Loupe Beckhoff Bridge.
+"""Stage-2 TwinCAT loop: TwinCAT <-> Bridge <-> KinematicDeltaPlant over ADS.
 
-Run on the rig, inside isaacenv, with TwinCAT running and the Loupe extension on
-the Isaac extension path:
+Same HIL loop as run_twincat_mock.py but with the Isaac kinematic Delta plant
+(boots Isaac). Run on the rig, inside isaacenv, with TwinCAT running (GVLs + MAIN
+from docs/twincat_program.md):
 
     python scripts/run_twincat_loop.py 5.1.204.123.1.1        # AMS NetId
     python scripts/run_twincat_loop.py 5.1.204.123.1.1 30     # + seconds
 
-Wires TwinCATLink + KinematicDeltaPlant + Bridge and interleaves app.update()
-(drives the bridge's cyclic ADS reads -> data callback) with bridge.scan().
-Reports the FAST-tier latency/jitter (bridge.fast_meter) -- the eval-5 home
-(rig-verifiable only). See docs/twincat_gvl_spec.md for the TwinCAT side.
+Reports the FAST-tier latency/jitter (bridge.fast_meter) -- the eval-5 home.
 """
 from __future__ import annotations
 
@@ -19,40 +17,28 @@ import sys
 def main(ams_net_id: str, seconds: float = 20.0) -> int:
     from deltahil.bridge import Bridge
     from deltahil.plant.kinematic_delta import KinematicDeltaPlant
+    from deltahil.plc.twincat_plc import TwinCATAdsLink
     from deltahil.tags import Tier
 
-    # 1) plant boots Isaac (SimulationApp) via _boot_isaac (one app / process)
-    plant = KinematicDeltaPlant(headless=True)
-    app = plant._sim_app
-
-    # 2) enable the Loupe Beckhoff Bridge extension, then create the link
-    import omni.kit.app
-    mgr = omni.kit.app.get_app().get_extension_manager()
-    try:
-        mgr.set_extension_enabled_immediate("loupe.simulation.beckhoff_bridge", True)
-    except Exception as exc:  # not on the path -> clear message
-        print(f"[twincat] could not enable the Loupe extension: {exc}\n"
-              f"          add its exts/ to the Isaac extension search path "
-              f"(see docs/twincat_gvl_spec.md).")
-        return 1
-
-    from deltahil.plc.twincat_plc import TwinCATLink
-    plc = TwinCATLink(ams_net_id)
-
-    # a part to pick (ground truth); the TwinCAT program commands the target
-    plant.set_part((0.0, 0.0, -900.0), present=True)
+    plant = KinematicDeltaPlant(headless=True)          # boots Isaac
+    plc = TwinCATAdsLink(ams_net_id)                    # direct ADS (pyads)
+    plant.set_part((0.0, 0.0, -900.0), present=True)    # part where the PLC picks
     bridge = Bridge(plc, plant)
 
     n = int(round(seconds / bridge.dt))
-    print(f"[twincat] AMS={ams_net_id}  running {seconds:.0f}s ({n} scans) ...")
+    print(f"[twincat] AMS={ams_net_id}  Isaac loop {seconds:.0f}s ({n} scans) ...")
+    last = -1
     for i in range(n):
-        app.update()            # drive the bridge's cyclic ADS read -> data callback
-        bridge.scan()           # cmd (from PLC) -> plant -> sensor (to PLC)
+        bridge.scan()                                  # plant.step drives Isaac physics
         if i % 250 == 0:
             cmd = plc.read_commands(Tier.FAST)
             s = plant.read_sensors()
-            print(f"  scan {i:5d}  cmd.target={tuple(round(v) for v in cmd['cmd.target_xyz'])} "
-                  f"grip={cmd['cmd.grip']}  grip_confirm={s['sensor.grip_confirm']}")
+            cyc = plc._plc.read_by_name("GVL_Sup.cycle_count", plc._plctype("int"))
+            print(f"  scan {i:5d}  target={tuple(round(v) for v in cmd['cmd.target_xyz'])} "
+                  f"grip={cmd['cmd.grip']}  confirm={s['sensor.grip_confirm']}  cycles={cyc}")
+            if cyc != last and cyc > 0:
+                plant.set_part((0.0, 0.0, -900.0), present=True)
+                last = cyc
 
     lat = bridge.fast_meter.summary_ms()
     print("-" * 56)
@@ -60,6 +46,7 @@ def main(ams_net_id: str, seconds: float = 20.0) -> int:
     print("  (eval 5 needs <10 ms round-trip, sigma<1 ms -- rig-verifiable; ADS "
           "polling may need true EtherCAT process-image I/O to meet it)")
     print("-" * 56)
+    plc.close()
     return 0
 
 

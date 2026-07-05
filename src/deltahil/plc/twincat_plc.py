@@ -141,3 +141,58 @@ class TwinCATLink:
     def scan(self, dt: float) -> None:
         # TwinCAT free-runs on its own task cycle (P1). Nothing to advance.
         return None
+
+
+def _require_pyads():
+    try:
+        import pyads
+    except ImportError as exc:
+        raise RuntimeError(
+            "TwinCATAdsLink needs pyads (pip install pyads) and an ADS route to "
+            "the TwinCAT target. See docs/twincat_gvl_spec.md + docs/twincat_program.md."
+        ) from exc
+    return pyads
+
+
+class TwinCATAdsLink:
+    """PLCLink talking to TwinCAT **directly over ADS** (pyads) -- synchronous
+    read/write of the GVL symbols, which fits the headless ``bridge.scan()`` loop
+    without the GUI-configured Loupe extension. ``scan()`` is a no-op (the PLC
+    free-runs on its own task -- P1). Reuses the same tag<->symbol mapping."""
+
+    def __init__(self, ams_net_id: str, *, ams_port: int = 851):
+        self.ams_net_id = ams_net_id
+        self.ams_port = ams_port
+        self._pyads = _require_pyads()
+        self._plc = self._pyads.Connection(ams_net_id, ams_port)
+        self._plc.open()
+
+    def _plctype(self, kind: str):
+        p = self._pyads
+        return {"bool": p.PLCTYPE_BOOL, "int": p.PLCTYPE_DINT,
+                "real": p.PLCTYPE_LREAL, "vec3": p.PLCTYPE_LREAL * 3}[kind]
+
+    def read_commands(self, tier: Tier) -> dict:
+        out = {}
+        for t in ALL_TAGS:
+            if t.direction is Dir.PLC_TO_PLANT and t.tier is tier:
+                v = self._plc.read_by_name(symbol_for(t.name), self._plctype(t.kind))
+                out[t.name] = _decode(t.kind, v)
+        return out
+
+    def write_sensors(self, tier: Tier, values: dict) -> None:
+        for name, value in values.items():
+            tag = _TAG_BY_NAME.get(name)
+            if tag is None or tag.direction is not Dir.PLANT_TO_PLC:
+                continue
+            self._plc.write_by_name(symbol_for(name), _encode(tag.kind, value),
+                                    self._plctype(tag.kind))
+
+    def scan(self, dt: float) -> None:
+        return None                      # PLC free-runs on its own task (P1)
+
+    def close(self) -> None:
+        try:
+            self._plc.close()
+        except Exception:
+            pass
