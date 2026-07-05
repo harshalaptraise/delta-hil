@@ -26,7 +26,7 @@ app = SimulationApp({"headless": True})
 
 import numpy as np  # noqa: E402
 import omni.usd  # noqa: E402
-from pxr import UsdLux  # noqa: E402
+from pxr import Gf, UsdGeom, UsdLux  # noqa: E402
 
 from deltahil.plant import cell_scene as cs  # noqa: E402
 from deltahil.plant.cell_plant import CellPlant, STACK0, THICK  # noqa: E402
@@ -40,6 +40,8 @@ os.makedirs(RENDER_DIR, exist_ok=True)
 
 N_TORT, N_BOX = 44, 16
 HIDE = (6.0, 4.0, -3.0)
+RES = (1600, 1000)      # HD render
+RT_SUB = 20             # RTX subframes/frame (higher -> cleaner)
 
 
 def snapshot(plant):
@@ -49,6 +51,47 @@ def snapshot(plant):
         "parts": [(p["id"], p["x"], p["y"], p["z"]) for p in plant.parts],
         "boxes": [(b["id"], b["x"], b["fill"]) for b in plant.boxes],
     }
+
+
+def _polish(stage):
+    """Additive industrial dressing (cell_scene stays frozen): brushed-steel PBR on
+    the frame, a base slab, a back panel + end kick-panels. Never touches the belts,
+    totes, robots, or the camera-facing (+Y) side."""
+    from pxr import Sdf, UsdShade
+
+    mtl = UsdShade.Material.Define(stage, "/World/Look/Steel")
+    sh = UsdShade.Shader.Define(stage, "/World/Look/Steel/PBR")
+    sh.CreateIdAttr("UsdPreviewSurface")
+    sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.34, 0.36, 0.40))
+    sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.85)
+    sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.34)
+    mtl.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+
+    def bind(prim):
+        try:
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(mtl)
+        except Exception:
+            UsdShade.MaterialBindingAPI(prim).Bind(mtl)
+
+    for prim in stage.Traverse():                          # steel on the frame + mounts
+        nm = prim.GetName()
+        if nm.startswith("Frame") or nm.startswith("Mount"):
+            bind(prim)
+
+    def slab(path, size, pos, color, metal=True):
+        c = UsdGeom.Cube.Define(stage, path)
+        c.CreateSizeAttr(1.0)
+        c.AddTransformOp().Set(Gf.Matrix4d().SetScale(Gf.Vec3d(*size))
+                               * Gf.Matrix4d().SetTranslate(Gf.Vec3d(*pos)))
+        c.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+        if metal:
+            bind(c.GetPrim())
+
+    L, W = cs.FR_L, cs.FR_W
+    slab("/World/Polish/Base",      (L + 0.5, W + 0.5, 0.10), (0.0, 0.0, -0.05), (0.13, 0.14, 0.16), metal=False)
+    slab("/World/Polish/BackPanel", (L, 0.04, 1.45), (0.0, -W / 2.0 - 0.02, 0.83), (0.22, 0.24, 0.27))
+    slab("/World/Polish/KickL",     (0.05, W, 0.30), (-L / 2.0 - 0.02, 0.0, 0.15), (0.17, 0.18, 0.21))
+    slab("/World/Polish/KickR",     (0.05, W, 0.30), (L / 2.0 + 0.02, 0.0, 0.15), (0.17, 0.18, 0.21))
 
 
 def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
@@ -61,8 +104,25 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         cs.spawn_box(stage, f"/World/CB_{i}", HIDE)
     for _ in range(60):
         app.update()
-    UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
-    UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0)
+    try:
+        _polish(stage)                                     # industrial dressing (never fatal)
+    except Exception as exc:
+        print(f"[cell] polish skipped ({exc})")
+
+    try:
+        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(450.0)
+        key = UsdLux.DistantLight.Define(stage, "/World/Light_Key")
+        key.CreateIntensityAttr(3200.0)
+        key.CreateColorAttr(Gf.Vec3f(1.0, 0.95, 0.88))     # warm key
+        UsdGeom.Xformable(key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-50.0, 0.0, 35.0))
+        fill = UsdLux.DistantLight.Define(stage, "/World/Light_Fill")
+        fill.CreateIntensityAttr(1300.0)
+        fill.CreateColorAttr(Gf.Vec3f(0.85, 0.90, 1.0))    # cool fill from the other side
+        UsdGeom.Xformable(fill.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-35.0, 0.0, -140.0))
+    except Exception as exc:
+        print(f"[cell] 3-point lights failed ({exc}); simple lights")
+        UsdLux.DomeLight.Define(stage, "/World/Light_Dome").CreateIntensityAttr(700.0)
+        UsdLux.DistantLight.Define(stage, "/World/Light_Key").CreateIntensityAttr(2500.0)
 
     plant = CellPlant()
     if ams == "mock":
@@ -110,15 +170,14 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
             # between samples (one step per sample). Fall back to the wall clock if the
             # PLC doesn't publish its clock.
             if plc_ns is not None and prev_plc is not None:
-                rdt = (plc_ns - prev_plc) / 1.0e9
-                clock_src = "PLC clock (GVL_Cell.plc_time_ns)"
+                rdt = min((plc_ns - prev_plc) / 1.0e9, 0.05)   # PLC clock; clamp MAX only
+                clock_src = "PLC clock (GVL_Cell.plc_time_ns)"  # rdt may be 0 (no new tick)
             else:
-                rdt = now - prev
-            rdt = min(max(rdt, 0.001), 0.05)             # guard against ADS hiccups
+                rdt = min(max(now - prev, 0.001), 0.05)        # wall-clock fallback
             prev, prev_plc = now, plc_ns
             plant.apply_commands(cmds)
-            if enable:
-                plant.step(rdt)                          # frozen when the operator disables
+            if enable and rdt > 0.0:                            # advance ONLY when time passed
+                plant.step(rdt)                                #   (no over-advance between ticks)
             if (now - start) >= next_snap:
                 snaps.append(snapshot(plant)); next_snap += SNAP_DT
         print(f"[cell] sim clock source: {clock_src}")
@@ -135,15 +194,15 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
     from PIL import Image
 
     cam = rep.create.camera(position=(2.0, 3.8, 2.6), look_at=(0.0, 0.0, 0.5))
-    rp = rep.create.render_product(cam, (900, 560))
+    rp = rep.create.render_product(cam, RES)
     rgb = rep.AnnotatorRegistry.get_annotator("rgb")
     rgb.attach([rp])
-    for _ in range(12):
-        rep.orchestrator.step(rt_subframes=10)
+    for _ in range(16):
+        rep.orchestrator.step(rt_subframes=RT_SUB)
 
     def capture():
         for _ in range(6):
-            rep.orchestrator.step(rt_subframes=10)
+            rep.orchestrator.step(rt_subframes=RT_SUB)
             im = np.asarray(rgb.get_data())
             if im.ndim == 3 and im.size and im.shape[2] >= 3:
                 return im[:, :, :3].astype("uint8")
@@ -183,14 +242,25 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
             print(f"  frame {fi+1}/{len(snaps)}")
 
     if imgs:
-        try:
-            pal = imgs[len(imgs) // 2].convert("P", palette=Image.ADAPTIVE, colors=128)
-            fp = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in imgs]
-            fp[0].save(OUT_GIF, save_all=True, append_images=fp[1:], duration=70, loop=0, disposal=2)
+        out = None
+        out_mp4 = OUT_GIF[:-4] + ".mp4"
+        try:                                                 # HD H.264 -- right format for HD
+            import imageio
+            imageio.mimwrite(out_mp4, [np.asarray(im) for im in imgs],
+                             fps=15, codec="libx264", quality=8, macro_block_size=8)
+            out = out_mp4
         except Exception as exc:
-            print(f"[cell] palette quantize failed ({exc}); saving RGB gif")
-            imgs[0].save(OUT_GIF, save_all=True, append_images=imgs[1:], duration=70, loop=0)
-        print(f"\n[cell] wrote {OUT_GIF}  exists={os.path.exists(OUT_GIF)}  frames={len(imgs)}\n")
+            print(f"[cell] mp4 encode unavailable ({exc}); writing a downscaled gif")
+        if out is None:                                      # gif fallback (downscaled, shared palette)
+            sm = [im.resize((1000, 1000 * im.height // im.width)) for im in imgs]
+            try:
+                pal = sm[len(sm) // 2].convert("P", palette=Image.ADAPTIVE, colors=128)
+                fp = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in sm]
+                fp[0].save(OUT_GIF, save_all=True, append_images=fp[1:], duration=70, loop=0, disposal=2)
+            except Exception:
+                sm[0].save(OUT_GIF, save_all=True, append_images=sm[1:], duration=70, loop=0)
+            out = OUT_GIF
+        print(f"\n[cell] wrote {out}  exists={os.path.exists(out)}  frames={len(imgs)}\n")
     else:
         print("\n[cell] no frames captured\n")
 
