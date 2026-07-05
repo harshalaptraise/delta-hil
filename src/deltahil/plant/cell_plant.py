@@ -30,7 +30,8 @@ GRIP_TOL = 0.02                 # m   position coincidence for a grasp (pick: st
 VEL_TOL = 0.06                  # m/s velocity coincidence (belt-velocity match, pick)
 PLACE_POS_TOL = 0.10            # m   a release over a 0.26 m tote lands in it (never drop)
 PLACE_VEL_TOL = 0.40            # m/s (you drop it in; no tight velocity lock needed)
-REACH_XY = 0.20                 # m   lateral reach from a robot's axis (wider pick/place window)
+REACH_XY = 0.17                 # m   clean lateral reach (matches the 0.08 track window at the
+                                #     0.15 m belt lane -> no arm over-stretch)
 Z_MIN, Z_MAX = 0.10, 0.60       # m   vertical reach envelope (world)
 PICK_Z = cs.PART_Z              # tortilla top on the product belt
 STACK0 = cs.BOX_TOP + 0.02      # first tortilla height inside a tote

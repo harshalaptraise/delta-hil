@@ -68,8 +68,8 @@ VAR
     dx : LREAL; dy : LREAL; lat : LREAL;
 END_VAR
 VAR CONSTANT
-    WIN : LREAL := 130.0;  CLAIM_LO : LREAL := 300.0;   // wide window -> tracks a moving tote
-    REACH : LREAL := 200.0;  Z_MIN : LREAL := 100.0;  Z_MAX : LREAL := 600.0;
+    WIN : LREAL := 80.0;  CLAIM_LO : LREAL := 300.0;   // track only within clean reach (no over-stretch)
+    REACH : LREAL := 170.0;  Z_MIN : LREAL := 100.0;  Z_MAX : LREAL := 600.0;
     HOME_Z : LREAL := 420.0;  PICK_Z : LREAL := 480.0;  PICK_HI : LREAL := 580.0;
     BOX_Y : LREAL := 150.0;  PLACE_HI : LREAL := 460.0;  STACK0 : LREAL := 180.0;  THICK : LREAL := 14.0;
     LOCK_TIME : TIME := T#300MS;   // tracking-lock dwell (could be a GVL input)
