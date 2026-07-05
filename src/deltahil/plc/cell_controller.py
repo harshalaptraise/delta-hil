@@ -133,22 +133,22 @@ class MockCellController:
             return (s["gx"], s["gy"], PICK_HI), True
 
         if ph == "transfer":
-            nb = self._nearest_box(rx, bmap)              # target the nearest box live
-            if nb is None:
-                return (rx, cs.BOX_Y, PLACE_HI), True     # hold the part, wait for a box
-            s["box"] = nb
-            bx, _fill = bmap[nb]
+            if s.get("box") not in bmap:                  # COMMIT to one tote; re-pick only if it's gone
+                s["box"] = self._nearest_box(rx, bmap)
+            if s["box"] is None:
+                return (rx, cs.BOX_Y, PLACE_HI), True     # hold the part, wait for a tote
+            bx, _fill = bmap[s["box"]]
             if abs(bx - rx) < WIN and s["t"] > 0.15:
                 s.update(phase="place", t=0.0, place_t=0.0)   # fresh descend timer each place
             return (min(max(bx, rx - WIN), rx + WIN), cs.BOX_Y, PLACE_HI), True
 
         if ph == "place":
-            nb = self._nearest_box(rx, bmap)
-            if nb is None:
+            if s.get("box") not in bmap:                  # stay committed to the same tote
+                s["box"] = self._nearest_box(rx, bmap)
+            if s["box"] is None:
                 s["place_t"] = 0.0
                 return (rx, cs.BOX_Y, PLACE_HI), True      # no tote -> HOLD and wait
-            s["box"] = nb
-            bx, fill = bmap[nb]
+            bx, fill = bmap[s["box"]]
             if abs(bx - rx) < WIN:
                 # descend timer runs ONLY while the tote is in the window, so we never
                 # release before the TCP has actually gone down into the tote
