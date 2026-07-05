@@ -4,15 +4,15 @@ Hardware-in-the-loop simulator for **challenging pick-and-place**: ABB **IRB 360
 Delta** robots on **NVIDIA Isaac Sim**, closed around a **real industrial PLC**,
 with honest pose calibration and deliberate fault injection.
 
-The headline system is a **two-robot tortilla cell**: a real **Beckhoff TwinCAT**
-soft-PLC runs a continuous conveyor-tracking line — it tracks streamed tortillas,
+The headline system is a **two-robot food-items cell**: a real **Beckhoff TwinCAT**
+soft-PLC runs a continuous conveyor-tracking line — it tracks streamed food items,
 splits them between an upstream and a downstream robot, velocity-matches each pick
 and place on the fly, and the simulation just executes, senses, and conserves. The
 same code also runs **fully headless on a laptop** (mock PLC + mock plant, no GPU,
 no controller), which is the regression net.
 
 > The controller is real, its program is unchanged from sim to bench, and the sim
-> reads the controller's own clock. See `docs/blog_digital_twin.md` for the story.
+> reads the controller's own clock.
 
 ---
 
@@ -65,7 +65,7 @@ build, **Activate (RUN)**, then:
 python scripts/run_twincat_cell.py <AMS_NET_ID>        # the real PLC runs the whole line
 python scripts/run_twincat_cell.py <AMS_NET_ID> 50     #   ...for 50 s of sim
 ```
-The real PLC tracks the streamed tortillas, assigns robots, and commands every TCP +
+The real PLC tracks the streamed food items, assigns robots, and commands every TCP +
 grip live; the sim derives its `dt` from the PLC's own clock. Output:
 `assets/render/twincat_cell.mp4` (falls back to `.gif` if no H.264 encoder). Console
 prints the clock source, **per-robot A/B picks**, the **ADS round-trip mean/jitter**,
@@ -131,7 +131,7 @@ reach envelope** (every command is clamped to the measured reach — no over-str
 ## Cell architecture
 
 ```
-   sensors (parts/totes, TCP, grip)  ->            <-  commands (TCP + grip)
+   sensors (parts/boxes, TCP, grip)  ->            <-  commands (TCP + grip)
   ┌────────────────┐   ADS sum-read/write   ┌────────────────────────────┐
   │  TwinCAT PLC   │◄──────────────────────►│  CellPlant (pure plant)    │
   │  FB_CellRobot  │   GVL_Cell (mm/LREAL)  │  streams belts, adjudicates │
@@ -141,7 +141,7 @@ reach envelope** (every command is clamped to the measured reach — no over-str
         └───────────────────────────────►  Isaac Sim render (IRB 360 x2)
 ```
 
-- `plant/cell_plant.py` — the pure plant: streams tortillas + totes, executes the
+- `plant/cell_plant.py` — the pure plant: streams food items + boxes, executes the
   commanded TCPs, decides whether a grasp *coincided* in position **and** velocity,
   and conserves every part. It senses and actuates; it never decides control (P1/P2).
 - `plc/cell_controller.py` — `MockCellController`, the golden reference the TwinCAT
@@ -175,6 +175,5 @@ Both sides sit behind `interfaces.py`; nothing upstream changes when you swap th
 
 Keep `pytest` green as the regression net. The next step off the twin is the bench:
 the **PLC program is unchanged**, physics and a real gripper replace the plant's
-grasp adjudication, and a hard EtherCAT fieldbus replaces the polled ADS clock. See
-`docs/blog_digital_twin.md` ("Taking it to the bench") for what stays, drops, and
-arrives.
+grasp adjudication, and a hard EtherCAT fieldbus replaces the polled ADS clock —
+the controller keeps its logic; only its senses swap from silicon to steel.
