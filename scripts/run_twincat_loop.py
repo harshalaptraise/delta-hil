@@ -11,6 +11,7 @@ Reports the FAST-tier latency/jitter (bridge.fast_meter) -- the eval-5 home.
 """
 from __future__ import annotations
 
+import os
 import sys
 
 
@@ -47,7 +48,8 @@ def main(ams_net_id: str, seconds: float = 20.0) -> int:
           "polling may need true EtherCAT process-image I/O to meet it)")
     print("-" * 56)
     plc.close()
-    return 0
+    sys.stdout.flush()
+    os._exit(0)          # skip Kit/Python finalization (crash-dumps on exit)
 
 
 if __name__ == "__main__":

@@ -100,7 +100,10 @@ def main(ams_net_id: str, frames: int = 90) -> int:
         print("\n[twincat/render] no frames captured\n")
 
     plc.close()
-    return 0
+    # The GIF is on disk. Skip Kit/Python finalization (it crash-dumps on exit on
+    # Windows -- carb breakpad in Py_FinalizeEx); hard-exit cleanly instead.
+    sys.stdout.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
