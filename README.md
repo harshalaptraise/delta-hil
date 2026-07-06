@@ -1,5 +1,11 @@
 # delta-hil
 
+<p align="center">
+  <img src="docs/hero.gif" width="760" alt="Two ABB IRB 360 deltas on a live TwinCAT PLC — velocity-matched conveyor tracking in Isaac Sim">
+</p>
+
+<p align="center"><em>Two ABB IRB 360 deltas driven by a real Beckhoff TwinCAT PLC — velocity-matched conveyor tracking in NVIDIA Isaac Sim (top-right: TCP X-velocity locked to the belt at each pick).</em></p>
+
 Hardware-in-the-loop simulator for **challenging pick-and-place**: ABB **IRB 360
 Delta** robots on **NVIDIA Isaac Sim**, closed around a **real industrial PLC**,
 with honest pose calibration and deliberate fault injection.
