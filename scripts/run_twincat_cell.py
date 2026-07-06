@@ -43,15 +43,57 @@ N_TORT, N_BOX = 44, 16
 HIDE = (6.0, 4.0, -3.0)
 RES = (1600, 1000)      # HD render
 RT_SUB = 32             # RTX subframes/frame (higher -> less per-frame noise -> less flicker)
+VPLOT = True            # overlay the TCP-vx-vs-belt strip chart (top-right)
 
 
-def snapshot(plant):
+def snapshot(plant, dt, cmds):
+    rob, vx, vc, grip = {}, {}, {}, {}
+    for n, rb in plant.robots.items():
+        rob[n] = (rb["tcp"][0], rb["tcp"][1], rb["tcp"][2])
+        vx[n] = (rb["tcp"][0] - rb["tcp_prev"][0]) / dt if dt > 0 else 0.0   # realized TCP X-vel
+        vc[n] = float(cmds.get(n, {}).get("vel", (0.0, 0.0, 0.0))[0])        # commanded vff (X)
+        grip[n] = rb["carry"] is not None
     return {
-        "rob": {n: (rb["tcp"][0], rb["tcp"][1], rb["tcp"][2])
-                for n, rb in plant.robots.items()},
+        "rob": rob, "vx": vx, "vcmd": vc, "grip": grip,
+        "vsrc": plant.vs, "vbox": plant.vb,
         "parts": [(p["id"], p["x"], p["y"], p["z"]) for p in plant.parts],
         "boxes": [(b["id"], b["x"], b["fill"]) for b in plant.boxes],
     }
+
+
+def _draw_vplot(im, snaps, fi, win=120):
+    """Top-right strip chart: each robot's realized TCP X-velocity vs the belt
+    speeds, so the conveyor-tracking velocity match is visible frame by frame --
+    during a pick the vx trace rides the source-belt line; o marks a grab."""
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(im, "RGBA")
+    PW, PH, M = 360, 190, 18
+    x0, y0 = im.width - PW - M, M
+    d.rectangle([x0, y0, x0 + PW, y0 + PH], fill=(14, 16, 20, 195), outline=(90, 95, 105, 255))
+    padl, padt, padb = 8, 22, 16
+    gx0, gy0 = x0 + padl, y0 + padt
+    gw, gh = PW - padl - 10, PH - padt - padb
+    VMAX = 0.35
+    def vy(v): return gy0 + gh - (min(max(v, 0.0), VMAX) / VMAX) * gh
+    seg = snaps[max(0, fi - win + 1):fi + 1]
+    n = len(seg)
+    def xat(i): return gx0 + gw - (n - 1 - i) / max(win - 1, 1) * gw
+    vsrc, vbox = seg[-1]["vsrc"], seg[-1]["vbox"]
+    d.line([gx0, vy(vsrc), gx0 + gw, vy(vsrc)], fill=(90, 220, 130, 255), width=1)   # belt (src)
+    d.line([gx0, vy(vbox), gx0 + gw, vy(vbox)], fill=(90, 150, 240, 170), width=1)   # box belt
+    for nm, col in (("Robot_A", (90, 220, 245, 255)), ("Robot_B", (250, 180, 80, 255))):
+        pts = [(xat(i), vy(seg[i]["vx"][nm])) for i in range(n)]
+        if len(pts) > 1:
+            d.line(pts, fill=col, width=2)
+        for i in range(1, n):                              # mark grabs (carry begins)
+            if seg[i]["grip"][nm] and not seg[i - 1]["grip"][nm]:
+                px, py = xat(i), vy(seg[i]["vx"][nm])
+                d.ellipse([px - 3, py - 3, px + 3, py + 3], fill=(255, 255, 255, 255))
+    d.text((x0 + 8, y0 + 4), "TCP vx (X) vs belt", fill=(235, 235, 240, 255))
+    d.text((gx0 + gw - 62, vy(vsrc) - 12), f"belt {vsrc:.2f}", fill=(90, 220, 130, 255))
+    d.text((x0 + 8, y0 + PH - 14), "A", fill=(90, 220, 245, 255))
+    d.text((x0 + 24, y0 + PH - 14), "B   o=pick", fill=(250, 180, 80, 255))
+    return im
 
 
 def _polish(stage):
@@ -219,18 +261,20 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         sim_t = 0.0
         while sim_t < sim_seconds:
             sensors = plant.read_sensors()
-            plant.apply_commands(ctrl.decide(sensors, dt))
+            cmds = ctrl.decide(sensors, dt)
+            plant.apply_commands(cmds)
             plant.step(dt)
             sim_t += dt
             if sim_t >= next_snap:
-                snaps.append(snapshot(plant)); next_snap += SNAP_DT
+                snaps.append(snapshot(plant, dt, cmds)); next_snap += SNAP_DT
     else:
         # live PLC: run in REAL wall-clock time so the PLC's TON timers line up with
         # the sim motion; GVL_Cell.enable (forced in the Watch) gates all motion --
         # FALSE freezes the sim, TRUE runs it. Snapshots on wall-time so a freeze
         # shows in the render.
         start = time.perf_counter(); prev = start; prev_plc = None; clock_src = "wall clock"
-        seen_ids, ab, vmatch = set(), {"Robot_A": 0, "Robot_B": 0}, []
+        seen_ids, ab = set(), {"Robot_A": 0, "Robot_B": 0}
+        vm_pick, vm_place = [], []
         while (time.perf_counter() - start) < sim_seconds:
             sensors = plant.read_sensors()
             t0 = time.perf_counter()
@@ -247,30 +291,37 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
                 rdt = min(max(now - prev, 0.001), 0.05)        # wall-clock fallback
             prev, prev_plc = now, plc_ns
             plant.apply_commands(cmds)
+            vdt = 0.01
             if enable and rdt > 0.0:
                 # sub-step the CONTINUOUS plant between (coarse) PLC ticks so fast
                 # tracking stays smooth -- the control sample rate is unchanged (one
                 # command per sample), only the plant integration is finer.
                 nsub = max(1, min(8, int(rdt / 0.003 + 0.5)))
+                vdt = rdt / nsub
                 for _ in range(nsub):
-                    plant.step(rdt / nsub)
+                    plant.step(vdt)
                 for pt in plant.parts:                          # tally which robot picked
                     if pt["state"] in ("carried", "placed") and pt["id"] not in seen_ids:
                         seen_ids.add(pt["id"]); ab[pt["robot"]] += 1
-                sub_dt = rdt / nsub                              # velocity-lock diagnostic
-                for nm, rb in plant.robots.items():
+                for nm, rb in plant.robots.items():             # velocity-lock diagnostic
                     vcmd = cmds[nm].get("vel", (0.0, 0.0, 0.0))[0]
                     if abs(vcmd) > 1e-6:                         # a feed-forward is commanded
-                        vx = (rb["tcp"][0] - rb["tcp_prev"][0]) / sub_dt if sub_dt > 0 else 0.0
-                        vmatch.append(abs(vx - vcmd))
+                        vx = (rb["tcp"][0] - rb["tcp_prev"][0]) / vdt if vdt > 0 else 0.0
+                        (vm_pick if abs(vcmd - plant.vs) < 1e-6 else vm_place).append(abs(vx - vcmd))
             if (now - start) >= next_snap:
-                snaps.append(snapshot(plant)); next_snap += SNAP_DT
+                snaps.append(snapshot(plant, vdt, cmds)); next_snap += SNAP_DT
         print(f"[cell] sim clock source: {clock_src}")
         print(f"[cell] per-robot picks  A/B = {ab['Robot_A']}/{ab['Robot_B']}")
-        if vmatch:
-            locked = sum(1 for e in vmatch if e < VEL_TOL)
-            print(f"[cell] velocity feed-forward: {locked}/{len(vmatch)} tracking steps locked "
-                  f"within {VEL_TOL} m/s  (mean |vx-vcmd| = {sum(vmatch) / len(vmatch):.4f} m/s)")
+
+        def _vrep(label, arr):
+            if not arr:
+                return
+            locked = sum(1 for e in arr if e < VEL_TOL)
+            print(f"[cell]   {label}: {locked}/{len(arr)} steps locked < {VEL_TOL} m/s "
+                  f"(mean {sum(arr) / len(arr):.4f} m/s)")
+        print("[cell] velocity feed-forward vx-match (X):")
+        _vrep("pick track  (vs source belt)", vm_pick)   # the pick match you care about
+        _vrep("place track (vs box belt, incl. slew)", vm_place)
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "
@@ -327,7 +378,14 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
             free_b.append(box_map.pop(bid))
         arr = capture()
         if arr is not None:
-            imgs.append(Image.fromarray(arr))
+            im = Image.fromarray(arr)
+            if VPLOT:
+                try:
+                    _draw_vplot(im, snaps, fi)
+                except Exception as exc:
+                    if fi == 0:
+                        print(f"[cell] vx overlay skipped ({exc})")
+            imgs.append(im)
         if fi % 15 == 0:
             print(f"  frame {fi+1}/{len(snaps)}")
 
@@ -353,6 +411,23 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         print(f"\n[cell] wrote {out}  exists={os.path.exists(out)}  frames={len(imgs)}\n")
     else:
         print("\n[cell] no frames captured\n")
+
+    try:                                                       # velocity trace for offline plotting
+        import csv
+        cp = OUT_GIF[:-4] + "_velocity.csv"
+        with open(cp, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["frame", "t_s", "vx_A", "vx_B", "vcmd_A", "vcmd_B",
+                        "belt_src", "belt_box", "carry_A", "carry_B"])
+            for i, s in enumerate(snaps):
+                w.writerow([i, round(i * SNAP_DT, 3),
+                            round(s["vx"]["Robot_A"], 4), round(s["vx"]["Robot_B"], 4),
+                            round(s["vcmd"]["Robot_A"], 4), round(s["vcmd"]["Robot_B"], 4),
+                            s["vsrc"], s["vbox"],
+                            int(s["grip"]["Robot_A"]), int(s["grip"]["Robot_B"])])
+        print(f"[cell] wrote velocity trace {cp}")
+    except Exception as exc:
+        print(f"[cell] velocity csv skipped ({exc})")
 
     if link is not None:
         link.close()
