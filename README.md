@@ -6,10 +6,12 @@ with honest pose calibration and deliberate fault injection.
 
 The headline system is a **two-robot food-items cell**: a real **Beckhoff TwinCAT**
 soft-PLC runs a continuous conveyor-tracking line — it tracks streamed food items,
-splits them between an upstream and a downstream robot, velocity-matches each pick
-and place on the fly, and the simulation just executes, senses, and conserves. The
-same code also runs **fully headless on a laptop** (mock PLC + mock plant, no GPU,
-no controller), which is the regression net.
+splits them between an upstream and a downstream robot, and **velocity-matches** each
+pick and place on the fly. The PLC commands a **velocity feed-forward** (the tool's X
+is *slaved* to the conveyor speed, PickMaster-style — not a chased position), which
+the sim integrates; it just executes, senses, and conserves. The same code also runs
+**fully headless on a laptop** (mock PLC + mock plant, no GPU, no controller), which
+is the regression net.
 
 > The controller is real, its program is unchanged from sim to bench, and the sim
 > reads the controller's own clock.
@@ -24,7 +26,7 @@ Everything is additive and each rung is independently useful. Start at the top
 ### 0 · Laptop — no GPU, no PLC
 
 ```bash
-pytest -q                      # 39 tests: plant, controller, calibration evals
+pytest -q                      # 40 tests: plant, controller, velocity-match, calibration
 python -m deltahil.run         # single-robot mock HIL loop + self-scored calibration
 ```
 `pytest` proves the whole control/plant/calibration stack. `deltahil.run` closes a
@@ -66,17 +68,20 @@ python scripts/run_twincat_cell.py <AMS_NET_ID>        # the real PLC runs the w
 python scripts/run_twincat_cell.py <AMS_NET_ID> 50     #   ...for 50 s of sim
 ```
 The real PLC tracks the streamed food items, assigns robots, and commands every TCP +
-grip live; the sim derives its `dt` from the PLC's own clock. Output:
-`assets/render/twincat_cell.mp4` (falls back to `.gif` if no H.264 encoder). Console
-prints the clock source, **per-robot A/B picks**, the **ADS round-trip mean/jitter**,
-and the conservation ledger (`picked / placed / passed / conserved`).
-Force `GVL_Cell.enable := FALSE` in a Watch window to **freeze** the cell live.
+**velocity feed-forward** + grip live; the sim derives its `dt` from the PLC's own
+clock. Output: `assets/render/twincat_cell.mp4` (falls back to `.gif` if no H.264
+encoder) with a top-right **TCP-vx-vs-belt overlay** (bold where velocity-locked, a
+dot on the belt line at each grab) + a `…_velocity.csv` trace. Console prints the
+clock source, **per-robot A/B picks**, the **velocity-lock** split (pick-track vs
+place-track), the **ADS round-trip mean/jitter**, and the conservation ledger
+(`picked / placed / passed / conserved`). Force `GVL_Cell.enable := FALSE` in a Watch
+window to **freeze** the cell live; set `VPLOT = False` for a clean beauty render.
 
 ### Command table
 
 | Command | Where | Needs | What you get |
 |---|---|---|---|
-| `pytest -q` | laptop | nothing | 39 tests pass |
+| `pytest -q` | laptop | nothing | 40 tests pass |
 | `python -m deltahil.run` | laptop | nothing | mock HIL loop + eval-10 calibration self-score |
 | `python scripts/run_twincat_cell.py mock [secs]` | rig | Isaac | deterministic two-robot cell → `twincat_cell.mp4/.gif` |
 | `python scripts/cell_animation.py` | rig | Isaac | scripted two-robot cell → `cell_pick.gif` |
@@ -124,31 +129,36 @@ Every module cites these by number; see `src/deltahil/constitution.py`.
 | P7 | HIL value is conditional — worth it only if the program under test is real; real faults, $0 core plant |
 | A  | Two-tier I/O — FAST (EtherCAT/EtherNet-IP) under the eval-5 jitter bound; SLOW (OPC UA) supervisory |
 
-The cell adds two working invariants on top: **sampled-data honesty** (the sim
-advances by the PLC's own `plc_time_ns` clock, one step per sample) and a **bounded
-reach envelope** (every command is clamped to the measured reach — no over-stretch).
+The cell adds three working invariants on top: **sampled-data honesty** (the sim
+advances by the PLC's own `plc_time_ns` clock, one step per sample), a **bounded reach
+envelope** (every command is clamped to the measured reach — no over-stretch), and
+**velocity-slaved tracking** (the PLC commands a velocity feed-forward so the tracked
+axis moves at the conveyor speed, not a one-sample-lagged chased position).
 
 ## Cell architecture
 
 ```
-   sensors (parts/boxes, TCP, grip)  ->            <-  commands (TCP + grip)
+   sensors (parts/boxes, TCP, grip)  ->        <-  commands (TCP + velocity + grip)
   ┌────────────────┐   ADS sum-read/write   ┌────────────────────────────┐
   │  TwinCAT PLC   │◄──────────────────────►│  CellPlant (pure plant)    │
-  │  FB_CellRobot  │   GVL_Cell (mm/LREAL)  │  streams belts, adjudicates │
+  │  FB_CellRobot  │   GVL_Cell (mm/LREAL)  │  integrates vel, adjudicates│
   │  x2 + MAIN     │                        │  grasp coincidence, ledger  │
   └────────────────┘                        └────────────────────────────┘
         ▲ plc_time_ns (the shared clock)              ▼ snapshots
         └───────────────────────────────►  Isaac Sim render (IRB 360 x2)
 ```
 
-- `plant/cell_plant.py` — the pure plant: streams food items + boxes, executes the
-  commanded TCPs, decides whether a grasp *coincided* in position **and** velocity,
-  and conserves every part. It senses and actuates; it never decides control (P1/P2).
+- `plant/cell_plant.py` — the pure plant: streams food items + boxes, **integrates the
+  commanded velocity feed-forward** (`tcp += vel·dt`) then trims to the position target,
+  decides whether a grasp *coincided* in position **and** velocity, and conserves every
+  part. It senses and actuates; it never decides control (P1/P2).
 - `plc/cell_controller.py` — `MockCellController`, the golden reference the TwinCAT
-  `FB_CellRobot` mirrors 1:1. Claim → track (velocity-matched) → grip → transfer →
-  place; upstream robot splits, downstream is the catch-all; never abandons a pick.
+  `FB_CellRobot` mirrors 1:1. Claim → track (X velocity-slaved to the belt) → grip →
+  transfer → place; upstream robot splits, downstream is the catch-all; never abandons a
+  pick.
 - `plc/cell_link.py` — `CellAdsLink`: one ADS sum-write of sensors, one sum-read of
-  commands + the PLC clock (m ↔ mm at the seam).
+  commands (TCP + velocity feed-forward + grip) + the PLC clock (m ↔ mm at the seam;
+  the velocity symbols are optional, so an older PLC still runs).
 - `scripts/run_twincat_cell.py` — boots Isaac, runs the loop against the live PLC
   (or the mock), then renders. `cell_scene.py` (frozen) builds the USD; the render
   script dresses it (steel frame, belts, lighting) additively.
@@ -168,6 +178,7 @@ Both sides sit behind `interfaces.py`; nothing upstream changes when you swap th
 |------|-------|--------|
 | 10 · calibration (P5, P3) | laptop / CI | **self-scored PASS** |
 | 3 · grasp on pose∧velocity coincidence (P3) | laptop / rig | mock: **passed 0, conserved** |
+| velocity-lock at pick (P3) | laptop / rig | **matched** — grab latches only at &#124;vx−belt&#124; < 0.015 m/s |
 | 5 · <10 ms / σ<1 ms round-trip (P1, A) | your rig | **met** — cell ADS ≈ 2.0 ms, σ ≈ 0.25 ms |
 | reach envelope never violated (cell) | laptop / rig | **0 violations** in mock + live |
 
