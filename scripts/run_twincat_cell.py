@@ -47,14 +47,15 @@ VPLOT = True            # overlay the TCP-vx-vs-belt strip chart (top-right)
 
 
 def snapshot(plant, dt, cmds):
-    rob, vx, vc, grip = {}, {}, {}, {}
+    rob, vx, vc, grip, matched = {}, {}, {}, {}, {}
     for n, rb in plant.robots.items():
         rob[n] = (rb["tcp"][0], rb["tcp"][1], rb["tcp"][2])
         vx[n] = (rb["tcp"][0] - rb["tcp_prev"][0]) / dt if dt > 0 else 0.0   # realized TCP X-vel
         vc[n] = float(cmds.get(n, {}).get("vel", (0.0, 0.0, 0.0))[0])        # commanded vff (X)
         grip[n] = rb["carry"] is not None
+        matched[n] = abs(vc[n]) > 1e-6 and abs(vx[n] - vc[n]) < VEL_TOL       # velocity-locked?
     return {
-        "rob": rob, "vx": vx, "vcmd": vc, "grip": grip,
+        "rob": rob, "vx": vx, "vcmd": vc, "grip": grip, "matched": matched,
         "vsrc": plant.vs, "vbox": plant.vb,
         "parts": [(p["id"], p["x"], p["y"], p["z"]) for p in plant.parts],
         "boxes": [(b["id"], b["x"], b["fill"]) for b in plant.boxes],
@@ -81,18 +82,22 @@ def _draw_vplot(im, snaps, fi, win=120):
     vsrc, vbox = seg[-1]["vsrc"], seg[-1]["vbox"]
     d.line([gx0, vy(vsrc), gx0 + gw, vy(vsrc)], fill=(90, 220, 130, 255), width=1)   # belt (src)
     d.line([gx0, vy(vbox), gx0 + gw, vy(vbox)], fill=(90, 150, 240, 170), width=1)   # box belt
-    for nm, col in (("Robot_A", (90, 220, 245, 255)), ("Robot_B", (250, 180, 80, 255))):
-        pts = [(xat(i), vy(seg[i]["vx"][nm])) for i in range(n)]
-        if len(pts) > 1:
-            d.line(pts, fill=col, width=2)
-        for i in range(1, n):                              # mark grabs (carry begins)
+    for nm, base in (("Robot_A", (90, 220, 245)), ("Robot_B", (250, 180, 80))):
+        for i in range(1, n):                              # BOLD where velocity-locked, faint on slews
+            p0 = (xat(i - 1), vy(seg[i - 1]["vx"][nm]))
+            p1 = (xat(i), vy(seg[i]["vx"][nm]))
+            if seg[i].get("matched", {}).get(nm):
+                d.line([p0, p1], fill=(base[0], base[1], base[2], 255), width=3)
+            else:
+                d.line([p0, p1], fill=(base[0], base[1], base[2], 85), width=1)
+        for i in range(1, n):                              # grabs sit ON the source-belt line
             if seg[i]["grip"][nm] and not seg[i - 1]["grip"][nm]:
-                px, py = xat(i), vy(seg[i]["vx"][nm])
-                d.ellipse([px - 3, py - 3, px + 3, py + 3], fill=(255, 255, 255, 255))
+                px = xat(i)
+                d.ellipse([px - 3, vy(vsrc) - 3, px + 3, vy(vsrc) + 3], fill=(255, 255, 255, 255))
     d.text((x0 + 8, y0 + 4), "TCP vx (X) vs belt", fill=(235, 235, 240, 255))
     d.text((gx0 + gw - 62, vy(vsrc) - 12), f"belt {vsrc:.2f}", fill=(90, 220, 130, 255))
     d.text((x0 + 8, y0 + PH - 14), "A", fill=(90, 220, 245, 255))
-    d.text((x0 + 24, y0 + PH - 14), "B   o=pick", fill=(250, 180, 80, 255))
+    d.text((x0 + 24, y0 + PH - 14), "B  bold=locked faint=slew o=pick", fill=(250, 180, 80, 255))
     return im
 
 
