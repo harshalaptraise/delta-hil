@@ -51,3 +51,35 @@ def test_plant_holds_no_control_logic():
     src = inspect.getsource(inspect.getmodule(CellPlant))
     for banned in ("claim", "assign", "intercept", "nearest_box", "schedule"):
         assert banned not in src, f"control logic leaked into the plant: {banned!r}"
+
+
+def test_velocity_feedforward():
+    # Velocity-mode conveyor tracking: the controller commands a velocity feed-forward
+    # (X slaved to the belt), and picks/places still succeed under the TIGHTENED gate.
+    from deltahil.plant.cell_plant import VEL_TOL
+    assert VEL_TOL <= 0.02, "gate must be tight for the velocity lock to mean something"
+
+    plant = CellPlant(seed=7)
+    ctrl = MockCellController()
+    dt = 0.01
+    emitted_src = emitted_box = False
+    for _ in range(3000):
+        sensors = plant.read_sensors()
+        cmds = ctrl.decide(sensors, dt)
+        for cm in cmds.values():
+            vx, vy, vz = cm["vel"]
+            assert vy == 0.0 and vz == 0.0                 # only X (conveyor dir) is slaved
+            if abs(vx - sensors["belt_v_src"]) < 1e-9 and abs(vx) > 1e-6:
+                emitted_src = True                         # slaving to the source belt (pick)
+            if abs(vx - sensors["belt_v_box"]) < 1e-9 and abs(vx) > 1e-6:
+                emitted_box = True                         # slaving to the box belt (place)
+        plant.apply_commands(cmds)
+        plant.step(dt)
+        assert plant.conserved()                           # E5
+
+    assert emitted_src and emitted_box                     # feed-forward on BOTH belts
+    # picks/places latch only when |tcp_vel - belt_v| < VEL_TOL (the gate) -> success here
+    # means the velocity lock held at the tightened tolerance.
+    assert plant.ledger["picked"] >= 4
+    assert plant.ledger["placed"] >= 1
+    assert plant.reach_violations == 0                     # integrated vel stays in reach (E4)

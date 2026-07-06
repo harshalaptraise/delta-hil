@@ -27,7 +27,7 @@ from . import cell_scene as cs
 K_PARTS = 6                     # nearest belt parts reported to the controller
 K_BOXES = 4                     # nearest boxes reported
 GRIP_TOL = 0.02                 # m   position coincidence for a grasp (pick: strict)
-VEL_TOL = 0.06                  # m/s velocity coincidence (belt-velocity match, pick)
+VEL_TOL = 0.015                 # m/s velocity coincidence (tight: feed-forward locks X to belt exactly)
 PLACE_POS_TOL = 0.10            # m   a release over a 0.26 m tote lands in it (never drop)
 PLACE_VEL_TOL = 0.40            # m/s (you drop it in; no tight velocity lock needed)
 REACH_XY = 0.17                 # m   clean lateral reach (matches the 0.08 track window at the
@@ -67,6 +67,7 @@ class CellPlant:
         self.boxes = []                      # active totes
         self.robots = {
             name: {"rx": rx, "cmd_tcp": _home(rx), "cmd_grip": False,
+                   "cmd_vel": np.zeros(3),          # commanded TCP velocity feed-forward (m/s)
                    "tcp": _home(rx), "tcp_prev": _home(rx),
                    "carry": None, "grip_confirm": False}
             for name, (rx, _, _) in cs.ROBOTS.items()
@@ -78,7 +79,10 @@ class CellPlant:
 
     # -- controller -> plant -------------------------------------------------
     def apply_commands(self, cmds: dict) -> None:
-        """cmds: {robot_name: {"tcp": (x,y,z) metres world, "grip": bool}}."""
+        """cmds: {robot_name: {"tcp": (x,y,z) m world, "grip": bool, "vel": (vx,vy,vz) m/s}}.
+
+        "vel" is an OPTIONAL velocity feed-forward (conveyor-tracking slave); absent -> zero,
+        i.e. pure position mode (identical to before this field existed)."""
         for name, c in cmds.items():
             rb = self.robots.get(name)
             if rb is None:
@@ -91,6 +95,7 @@ class CellPlant:
                 tcp[2] = min(max(tcp[2], Z_MIN), Z_MAX)
             rb["cmd_tcp"] = tcp
             rb["cmd_grip"] = bool(c.get("grip", False))
+            rb["cmd_vel"] = np.asarray(c.get("vel", (0.0, 0.0, 0.0)), float)
 
     # -- physics -------------------------------------------------------------
     def step(self, dt: float) -> None:
@@ -120,12 +125,19 @@ class CellPlant:
         max_step = self.v_tcp * dt
         for name, rb in self.robots.items():
             rb["tcp_prev"] = rb["tcp"].copy()
-            to = rb["cmd_tcp"] - rb["tcp"]            # constant-speed move -> smooth motion
+            rb["tcp"] = rb["tcp"] + rb["cmd_vel"] * dt   # velocity slave (feed-forward)
+            to = rb["cmd_tcp"] - rb["tcp"]            # position trim toward the target
             d = float(np.linalg.norm(to))
             if d <= max_step or d < 1e-9:
                 rb["tcp"] = rb["cmd_tcp"].copy()
             else:
                 rb["tcp"] = rb["tcp"] + to * (max_step / d)
+            lat = float(np.hypot(rb["tcp"][0] - rb["rx"], rb["tcp"][1]))
+            if lat > REACH_XY:                        # keep integrated vel inside reach (E4)
+                s = REACH_XY / lat
+                rb["tcp"][0] = rb["rx"] + (rb["tcp"][0] - rb["rx"]) * s
+                rb["tcp"][1] = rb["tcp"][1] * s
+            rb["tcp"][2] = min(max(rb["tcp"][2], Z_MIN), Z_MAX)
             tcp_vel = (rb["tcp"] - rb["tcp_prev"]) / dt if dt > 0 else np.zeros(3)
 
             if rb["carry"] is None:

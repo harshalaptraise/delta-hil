@@ -30,7 +30,7 @@ from pxr import Gf, UsdGeom, UsdLux  # noqa: E402
 
 from deltahil.plant import cell_scene as cs  # noqa: E402
 from deltahil.plant.cell_plant import (BOX_TOP, BOX_Y, CellPlant, STACK0,  # noqa: E402
-                                        THICK)
+                                        THICK, VEL_TOL)
 from deltahil.plant.irb360_pose import pose, world_to_local  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -230,7 +230,7 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
         # FALSE freezes the sim, TRUE runs it. Snapshots on wall-time so a freeze
         # shows in the render.
         start = time.perf_counter(); prev = start; prev_plc = None; clock_src = "wall clock"
-        seen_ids, ab = set(), {"Robot_A": 0, "Robot_B": 0}
+        seen_ids, ab, vmatch = set(), {"Robot_A": 0, "Robot_B": 0}, []
         while (time.perf_counter() - start) < sim_seconds:
             sensors = plant.read_sensors()
             t0 = time.perf_counter()
@@ -257,10 +257,20 @@ def main(ams, sim_seconds=50.0, dt=0.01, sample_every=7):
                 for pt in plant.parts:                          # tally which robot picked
                     if pt["state"] in ("carried", "placed") and pt["id"] not in seen_ids:
                         seen_ids.add(pt["id"]); ab[pt["robot"]] += 1
+                sub_dt = rdt / nsub                              # velocity-lock diagnostic
+                for nm, rb in plant.robots.items():
+                    vcmd = cmds[nm].get("vel", (0.0, 0.0, 0.0))[0]
+                    if abs(vcmd) > 1e-6:                         # a feed-forward is commanded
+                        vx = (rb["tcp"][0] - rb["tcp_prev"][0]) / sub_dt if sub_dt > 0 else 0.0
+                        vmatch.append(abs(vx - vcmd))
             if (now - start) >= next_snap:
                 snaps.append(snapshot(plant)); next_snap += SNAP_DT
         print(f"[cell] sim clock source: {clock_src}")
         print(f"[cell] per-robot picks  A/B = {ab['Robot_A']}/{ab['Robot_B']}")
+        if vmatch:
+            locked = sum(1 for e in vmatch if e < VEL_TOL)
+            print(f"[cell] velocity feed-forward: {locked}/{len(vmatch)} tracking steps locked "
+                  f"within {VEL_TOL} m/s  (mean |vx-vcmd| = {sum(vmatch) / len(vmatch):.4f} m/s)")
     L = plant.ledger
     print(f"[cell] loop done: picked={L['picked']} placed={L['placed']} "
           f"passed={L['passed']} reach_violations={plant.reach_violations} "

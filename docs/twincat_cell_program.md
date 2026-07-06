@@ -33,8 +33,10 @@ VAR_GLOBAL
     // --- PLC -> sim (commands) ---
     cA_tcp : ARRAY[0..2] OF LREAL;        // commanded TCP (mm)
     cA_grip : BOOL;
+    cA_vel : ARRAY[0..2] OF LREAL;        // commanded TCP velocity feed-forward (mm/s), X-slaved
     cB_tcp : ARRAY[0..2] OF LREAL;
     cB_grip : BOOL;
+    cB_vel : ARRAY[0..2] OF LREAL;        // velocity feed-forward (mm/s)
 
     // --- operator control (force this in the Watch window) ---
     enable : BOOL := TRUE;                // FALSE -> PLC holds + sim freezes; TRUE -> runs
@@ -66,6 +68,7 @@ VAR_IN_OUT
 END_VAR
 VAR_OUTPUT
     cmd_x : LREAL; cmd_y : LREAL; cmd_z : LREAL; cmd_grip : BOOL;
+    cmd_vx : LREAL; cmd_vy : LREAL; cmd_vz : LREAL;   // velocity feed-forward (mm/s), X-slaved while tracking
 END_VAR
 VAR
     phase      : INT := 0;    // 0 idle 1 track 2 lift 3 transfer 4 place 5 retract
@@ -112,6 +115,9 @@ ptmr(IN := (phase = phase_prev), PT := T#30S);
 phase_prev := phase;
 elapsed := ptmr.ET;
 
+// velocity feed-forward defaults to zero; only the tracking states set cmd_vx below
+cmd_vx := 0.0; cmd_vy := 0.0; cmd_vz := 0.0;
+
 // only the pick chase gives up (a part slipped by before grabbing). Once a part is
 // GRABBED the robot NEVER abandons it -- carrying phases wait as long as needed.
 IF phase = 1 AND elapsed > T#4S THEN phase := 0; part := -1; my_claim := -1; END_IF
@@ -155,6 +161,7 @@ CASE phase OF
                 // ride the moving part (velocity-matched) for LOCK_TIME, THEN grip
                 locktmr(IN := TRUE, PT := T#5S);
                 cmd_x := px; cmd_y := py; cmd_z := PICK_Z;
+                cmd_vx := GVL_Cell.belt_v_src;               // slave X to the source-belt velocity
                 cmd_grip := (locktmr.ET >= LOCK_TIME);
             ELSE
                 locktmr(IN := FALSE);
@@ -192,6 +199,7 @@ CASE phase OF
     ELSE
         IF (ABS(bx - rx) < WIN) AND (elapsed > T#150MS) THEN phase := 4; END_IF
         cmd_x := LIMIT(rx - WIN, bx, rx + WIN); cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;
+        cmd_vx := GVL_Cell.belt_v_box;                      // slave X to the box-belt velocity
     END_IF
 
 4:  // place -- stay committed; descend timer runs ONLY while the tote is in-window
@@ -218,11 +226,13 @@ CASE phase OF
     ELSIF ABS(bx - rx) < WIN THEN
         plctmr(IN := TRUE, PT := T#5S);                     // descend timer (only while tote in-window)
         cmd_x := bx; cmd_y := BOX_Y; cmd_z := STACK0 + DINT_TO_LREAL(bfill) * THICK + GRIP_OFFSET;
+        cmd_vx := GVL_Cell.belt_v_box;                      // slave X to the box while descending
         IF plctmr.ET < T#350MS THEN cmd_grip := TRUE; ELSE cmd_grip := FALSE; END_IF
         IF NOT grip_confirm THEN phase := 5; END_IF         // placed
     ELSE
         plctmr(IN := FALSE);                                // tote drifted out -> reset timer, hover
         cmd_x := LIMIT(rx - WIN, bx, rx + WIN); cmd_y := BOX_Y; cmd_z := PLACE_HI; cmd_grip := TRUE;
+        cmd_vx := GVL_Cell.belt_v_box;                      // still tracking the moving box
     END_IF
 
 5:  // retract
@@ -269,8 +279,10 @@ IF GVL_Cell.enable THEN
 
     GVL_Cell.cA_tcp[0] := rA.cmd_x; GVL_Cell.cA_tcp[1] := rA.cmd_y; GVL_Cell.cA_tcp[2] := rA.cmd_z;
     GVL_Cell.cA_grip := rA.cmd_grip;
+    GVL_Cell.cA_vel[0] := rA.cmd_vx; GVL_Cell.cA_vel[1] := rA.cmd_vy; GVL_Cell.cA_vel[2] := rA.cmd_vz;
     GVL_Cell.cB_tcp[0] := rB.cmd_x; GVL_Cell.cB_tcp[1] := rB.cmd_y; GVL_Cell.cB_tcp[2] := rB.cmd_z;
     GVL_Cell.cB_grip := rB.cmd_grip;
+    GVL_Cell.cB_vel[0] := rB.cmd_vx; GVL_Cell.cB_vel[1] := rB.cmd_vy; GVL_Cell.cB_vel[2] := rB.cmd_vz;
 END_IF
 ```
 

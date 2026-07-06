@@ -23,6 +23,7 @@ class CellAdsLink:
         self._cmd_names = [f"{G}.cA_tcp", f"{G}.cA_grip", f"{G}.cB_tcp", f"{G}.cB_grip",
                            f"{G}.enable"]
         self._has_time = True          # read the PLC clock until proven absent
+        self._has_vel = True           # read the velocity feed-forward until proven absent
 
     # -- plant -> PLC : one sum-write of all sensor arrays (m -> mm) ----------
     def write_sensors(self, sensors: dict) -> None:
@@ -50,19 +51,28 @@ class CellAdsLink:
         """Returns (cmds, enable, plc_time_ns). plc_time_ns is the PLC's own clock
         in ns (the sim derives dt from it); None if the PLC doesn't publish it ->
         the caller falls back to the wall clock. enable=False -> freeze."""
-        names = self._cmd_names + ([f"{G}.plc_time_ns"] if self._has_time else [])
+        names = list(self._cmd_names)
+        if self._has_vel:
+            names += [f"{G}.cA_vel", f"{G}.cB_vel"]
+        if self._has_time:
+            names += [f"{G}.plc_time_ns"]
         try:
             v = self._plc.read_list_by_name(names)
         except Exception:
-            if not self._has_time:
-                raise
-            self._has_time = False                       # clock symbol absent -> fall back
-            v = self._plc.read_list_by_name(self._cmd_names)
+            if self._has_vel:                            # vel symbols absent -> drop, keep clock
+                self._has_vel = False
+                return self.read_commands()
+            if self._has_time:                           # clock symbol absent -> drop it too
+                self._has_time = False
+                return self.read_commands()
+            raise
+        vA = tuple(c / 1000.0 for c in v[f"{G}.cA_vel"]) if self._has_vel else (0.0, 0.0, 0.0)
+        vB = tuple(c / 1000.0 for c in v[f"{G}.cB_vel"]) if self._has_vel else (0.0, 0.0, 0.0)
         cmds = {
             "Robot_A": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cA_tcp"]),
-                        "grip": bool(v[f"{G}.cA_grip"])},
+                        "grip": bool(v[f"{G}.cA_grip"]), "vel": vA},
             "Robot_B": {"tcp": tuple(c / 1000.0 for c in v[f"{G}.cB_tcp"]),
-                        "grip": bool(v[f"{G}.cB_grip"])},
+                        "grip": bool(v[f"{G}.cB_grip"]), "vel": vB},
         }
         plc_ns = int(v[f"{G}.plc_time_ns"]) if self._has_time else None
         return cmds, bool(v[f"{G}.enable"]), plc_ns

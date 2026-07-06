@@ -69,18 +69,20 @@ class MockCellController:
     def decide(self, sensors, dt):
         pmap = {pid: (x, y) for (pid, x, y, valid) in sensors["parts"] if valid}
         bmap = {bid: (x, fill) for (bid, x, fill, valid) in sensors["boxes"] if valid}
+        vsrc, vbox = sensors["belt_v_src"], sensors["belt_v_box"]
         claimed = self._claimed()
         cmds = {}
         for name in sorted(sensors["robots"].keys()):     # Robot_A (upstream) first
             rx = ROBOT_X[name]
             s = self._state(name, rx)
             s["t"] += dt
+            s["vff"] = (0.0, 0.0, 0.0)                     # velocity feed-forward, set while tracking
             gc = sensors["robots"][name]["grip_confirm"]
-            tcp, grip = self._robot(name, rx, s, pmap, bmap, gc, claimed, dt)
-            cmds[name] = {"tcp": _clamp(tcp, rx), "grip": grip}
+            tcp, grip = self._robot(name, rx, s, pmap, bmap, gc, claimed, dt, vsrc, vbox)
+            cmds[name] = {"tcp": _clamp(tcp, rx), "grip": grip, "vel": s["vff"]}
         return cmds
 
-    def _robot(self, name, rx, s, pmap, bmap, gc, claimed, dt):
+    def _robot(self, name, rx, s, pmap, bmap, gc, claimed, dt, vsrc, vbox):
         home = (rx, 0.0, HOME_Z)
         ph = s["phase"]
 
@@ -122,6 +124,7 @@ class MockCellController:
             s["gx"], s["gy"] = x, y
             if abs(x - rx) < WIN:                          # in window -> descend + RIDE with it
                 s["lock"] = s.get("lock", 0.0) + dt        # conveyor-tracking dwell (velocity-matched)
+                s["vff"] = (vsrc, 0.0, 0.0)                # slave X to the source-belt velocity
                 return (x, y, PICK_Z), s["lock"] >= self.lock_time   # grip only after the lock
             s["lock"] = 0.0
             hx = rx - WIN if x < rx else rx + WIN          # else hover at window edge, ready
@@ -140,6 +143,7 @@ class MockCellController:
             bx, _fill = bmap[s["box"]]
             if abs(bx - rx) < WIN and s["t"] > 0.15:
                 s.update(phase="place", t=0.0, place_t=0.0)   # fresh descend timer each place
+            s["vff"] = (vbox, 0.0, 0.0)                    # slave X to the box-belt velocity
             return (min(max(bx, rx - WIN), rx + WIN), BOX_Y, PLACE_HI), True
 
         if ph == "place":
@@ -157,8 +161,10 @@ class MockCellController:
                 grip = s["place_t"] < 0.35                 # descend fully, THEN release
                 if not gc:                                 # placed -> done
                     s.update(phase="retract", t=0.0)
+                s["vff"] = (vbox, 0.0, 0.0)                # slave X to the box while descending
                 return (bx, BOX_Y, stack_z), grip
             s["place_t"] = 0.0                             # tote drifted out -> wait again
+            s["vff"] = (vbox, 0.0, 0.0)                    # still tracking the moving box
             return (min(max(bx, rx - WIN), rx + WIN), BOX_Y, PLACE_HI), True
 
         # retract
