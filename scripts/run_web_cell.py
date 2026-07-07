@@ -22,8 +22,10 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--plc", default=None, metavar="AMS_NET_ID",
                     help="drive the cell with a live TwinCAT PLC over ADS (else mock)")
+    ap.add_argument("--realbot", action="store_true",
+                    help="render the real ABB IRB 360 CAD (loads ~3 MB glTF); else a light delta")
     args = ap.parse_args()
-    serve(args.host, args.port, args.plc)
+    serve(args.host, args.port, args.plc, "real" if args.realbot else "stylized")
     return 0
 
 

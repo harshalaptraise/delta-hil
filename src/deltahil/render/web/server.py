@@ -131,7 +131,7 @@ async def _index(request):
 
 
 async def _config(request):
-    return web.json_response(cell_config())
+    return web.json_response({**cell_config(), "robot_model": request.app.get("robot", "stylized")})
 
 
 async def _ws(request):
@@ -147,9 +147,10 @@ async def _ws(request):
     return ws
 
 
-def make_app(plc_ams: str | None = None) -> web.Application:
+def make_app(plc_ams: str | None = None, robot: str = "stylized") -> web.Application:
     app = web.Application()
     app["clients"] = set()
+    app["robot"] = robot
     app.router.add_get("/", _index)
     app.router.add_get("/config.json", _config)
     app.router.add_get("/ws", _ws)
@@ -170,7 +171,8 @@ def make_app(plc_ams: str | None = None) -> web.Application:
     return app
 
 
-def serve(host: str = "127.0.0.1", port: int = 8080, plc_ams: str | None = None) -> None:
+def serve(host: str = "127.0.0.1", port: int = 8080, plc_ams: str | None = None,
+          robot: str = "stylized") -> None:
     print(f"[web] delta-hil cell viewer -> http://{host}:{port}  "
-          f"({'live TwinCAT ' + plc_ams if plc_ams else 'mock controller'})")
-    web.run_app(make_app(plc_ams), host=host, port=port, print=None)
+          f"({'live TwinCAT ' + plc_ams if plc_ams else 'mock controller'}, robot={robot})")
+    web.run_app(make_app(plc_ams, robot), host=host, port=port, print=None)

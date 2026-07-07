@@ -24,6 +24,7 @@
 <canvas id="plot" width="360" height="150"></canvas>
 <div id="boot">loading delta-hil cell…</div>
 <script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/GLTFLoader.js"></script>
 <script>
 "use strict";
 // plant is Z-up (metres); three.js is Y-up:  P2T(x,y,z) -> (x, z, -y)
@@ -63,18 +64,89 @@ addEventListener('pointermove', e=>{ if(!drag)return; az-=(e.clientX-px)*0.006; 
 cv.addEventListener('wheel', e=>{ rad=clamp(rad*(1+Math.sign(e.deltaY)*0.08),1.8,10); e.preventDefault(); }, {passive:false});
 
 // ---- build the cell from /config.json --------------------------------------
-let CFG=null; const robots=[]; const tortPool=new Map(); const totePool=new Map();
+let CFG=null, MODE='stylized'; const robots=[]; const tortPool=new Map(); const totePool=new Map();
 function boxMesh(w,d,h,material){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material); return m; }
 
+// ===== real ABB IRB 360 CAD articulation (only when robot_model==='real') =====
+// ports src/deltahil/plant/irb360_pose.py -- metres, robot-local frame (z down).
+const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+const K={ RM:0.175, ZM:-0.263, HE1:V(0.682,0,-0.299), HA1:V(0.066,0,-1.144), HP:V(-0.010,0,-1.187),
+          PTOP:V(0,0,-0.148), PBOT:V(0,0,-1.178), ARMS:{1:0,2:240,3:120} };
+K.AOFF=K.HA1.clone().sub(K.HP);
+K.RF=K.HE1.clone().sub(V(K.RM,0,K.ZM)).length();
+K.RE=K.HA1.clone().sub(K.HE1).length();
+const ARM_LA={1:['LA1_CL','LA1_CU','LA1_1','LA1_2'],2:['LA2_CL','LA2_CU','LA2_1','LA2_2'],3:['LA3_CL','LA3_CU','LA3_1','LA3_2']};
+const CENTRAL={RevoluteLinkUpper:-0.577, RevoluteLinkLower:-0.745, RevoluteLinkPlate:-1.178};
+const PARTS=['BASE','MovingPlate','RevoluteLinkBase','RevoluteLinkUpper','RevoluteLinkLower','RevoluteLinkPlate',
+  'UA1','UA2','UA3'].concat(ARM_LA[1],ARM_LA[2],ARM_LA[3]);
+const rotzV=(p,deg)=>{const c=Math.cos(deg*Math.PI/180),s=Math.sin(deg*Math.PI/180);return V(p.x*c-p.y*s,p.x*s+p.y*c,p.z);};
+function solveElbow(P,u_r,attach,homeE){
+  const z=V(0,0,1), d=attach.clone().sub(P), a=d.dot(u_r), b=d.dot(z), Rr=Math.hypot(a,b);
+  const c=clamp((K.RF*K.RF+a*a+b*b-K.RE*K.RE)/(2*K.RF*Rr),-1,1), psi=Math.atan2(b,a);
+  let best=null,bd=1e18;
+  for(const sg of [1,-1]){ const th=-psi+sg*Math.acos(c);
+    const E=P.clone().add(u_r.clone().multiplyScalar(K.RF*Math.cos(th))).add(z.clone().multiplyScalar(-K.RF*Math.sin(th)));
+    const dd=E.clone().sub(homeE).length(); if(dd<bd){best=E;bd=dd;} }
+  return best;
+}
+const T3=(x,y,z)=>new THREE.Matrix4().makeTranslation(x,y,z);
+function mAbout(pivot,vf,vt){    // rotate about pivot mapping vf->vt (column convention)
+  const q=new THREE.Quaternion().setFromUnitVectors(vf.clone().normalize(),vt.clone().normalize());
+  return T3(pivot.x,pivot.y,pivot.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(T3(-pivot.x,-pivot.y,-pivot.z));
+}
+function frameM(d,w){ const dh=d.clone().normalize(); let wh=w.clone().sub(dh.clone().multiplyScalar(w.dot(dh))).normalize();
+  return new THREE.Matrix4().makeBasis(dh,wh,dh.clone().cross(wh)); }
+function mFrame(hE,hA,E,attach,width){   // map segment (hE->hA, width) onto (E->attach, width)
+  const R=frameM(attach.clone().sub(E),width).multiply(frameM(hA.clone().sub(hE),width).transpose());
+  return T3(E.x,E.y,E.z).multiply(R).multiply(T3(-hE.x,-hE.y,-hE.z));
+}
+function setM(o,M){ if(o){ o.matrix.copy(M); } }
+function buildRealRobots(cfg){
+  const loader=new THREE.GLTFLoader();
+  for(const r of cfg.robots){
+    const [rx,ry,rz]=r.base;
+    const G=new THREE.Group(); G.position.set(rx,rz,0); G.rotation.x=-Math.PI/2; scene.add(G);  // local(m,z-down)->three
+    const entry={name:r.name, G, parts:{}, ready:false, loaded:0}; robots.push(entry);
+    for(const pn of PARTS){
+      loader.load(`/static/robot/${pn}.glb`, gltf=>{
+        const o=gltf.scene; o.traverse(m=>{ if(m.isMesh) m.material=M.plate; });
+        o.matrixAutoUpdate=false; entry.parts[pn]=o; G.add(o);
+        if(++entry.loaded===PARTS.length) entry.ready=true;
+      }, undefined, e=>console.warn('glb load failed',pn));
+    }
+  }
+}
+function poseRobotReal(r, tcp){
+  if(!r.ready) return;
+  const T=V(tcp[0]-r.G.position.x, tcp[1], tcp[2]-CFG.base_z);   // target in robot-local metres
+  for(const i of [1,2,3]){
+    const phi=K.ARMS[i], u_r=rotzV(V(1,0,0),phi);
+    const P=V(K.RM*u_r.x, K.RM*u_r.y, K.ZM);
+    const A=V(-Math.sin(phi*Math.PI/180), Math.cos(phi*Math.PI/180), 0);
+    const homeE=rotzV(K.HE1,phi), homeA=rotzV(K.HA1,phi), attach=T.clone().add(rotzV(K.AOFF,phi));
+    const E=solveElbow(P,u_r,attach,homeE);
+    setM(r.parts['UA'+i], mAbout(P, homeE.clone().sub(P), E.clone().sub(P)));
+    const Mf=mFrame(homeE,homeA,E,attach,A);
+    for(const la of ARM_LA[i]) setM(r.parts[la], Mf);
+  }
+  setM(r.parts['MovingPlate'], T3(T.x-K.HP.x, T.y-K.HP.y, T.z-K.HP.z));
+  const q=new THREE.Quaternion().setFromUnitVectors(K.PBOT.clone().sub(K.PTOP).normalize(), T.clone().sub(K.PTOP).normalize());
+  const R=new THREE.Matrix4().makeRotationFromQuaternion(q);
+  for(const name in CENTRAL){ const zh=CENTRAL[name], t=(zh-K.PTOP.z)/(K.PBOT.z-K.PTOP.z);
+    const Cn=K.PTOP.clone().add(T.clone().sub(K.PTOP).multiplyScalar(t));
+    setM(r.parts[name], T3(Cn.x,Cn.y,Cn.z).multiply(R).multiply(T3(0,0,-zh))); }
+}
+
 function buildCell(cfg){
-  CFG=cfg;
+  CFG=cfg; MODE=cfg.robot_model||'stylized';
   // floor
   const fl=boxMesh(3.6,2.4,0.02,M.floor); fl.position.set(0,-0.01,0); scene.add(fl);
   // belts (three: x = length, y = up, z = -plant_y)
   const sb=cfg.src_belt, bb=cfg.box_belt;
   const src=boxMesh(sb.len, sb.w, 0.14, M.brown); src.position.copy(P2T(0, sb.y, sb.top-0.07)); scene.add(src);
   const box=boxMesh(bb.len, bb.w, 0.14, M.green); box.position.copy(P2T(0, bb.y, bb.top-0.07)); scene.add(box);
-  // robots: base disc + 3 delta arms (upper arm + parallelogram forearm) + platform + cup
+  if(MODE==='real'){ buildRealRobots(cfg); return; }
+  // robots (stylized): base disc + 3 delta arms (upper arm + parallelogram forearm) + platform + cup
   for(const r of cfg.robots){
     const g=new THREE.Group(); scene.add(g);
     const [rx,ry,rz]=r.base;
@@ -141,7 +213,7 @@ function toteMesh(){
 let SN=null;
 function applySnapshot(s){
   SN=s; if(s.source) SRC=s.source;
-  for(const r of robots) if(s.rob[r.name]) poseRobot(r, s.rob[r.name]);
+  for(const r of robots) if(s.rob[r.name]) (MODE==='real'?poseRobotReal:poseRobot)(r, s.rob[r.name]);
   const liveT=new Set();
   for(const [id,x,y,z] of s.parts){ liveT.add(id);
     let m=tortPool.get(id); if(!m){ m=tortMesh(); tortPool.set(id,m); }
@@ -206,7 +278,9 @@ function connect(){
   ws.onmessage=e=>{ if(document.getElementById('boot')) document.getElementById('boot').remove(); applySnapshot(JSON.parse(e.data)); };
   ws.onclose=()=>setTimeout(connect,1000);
 }
-fetch('/config.json').then(r=>r.json()).then(cfg=>{ buildCell(cfg); placeCam(); connect(); });
+fetch('/config.json').then(r=>r.json()).then(cfg=>{ buildCell(cfg);
+  if(MODE==='real'){ rad=5.8; el=0.28; tgt.set(0,0.95,0); }   // taller real robots need room
+  placeCam(); connect(); });
 
 (function loop(){ requestAnimationFrame(loop); if(!drag){ az+=0.0005; } placeCam(); rnd.render(scene,cam); })();
 </script>
