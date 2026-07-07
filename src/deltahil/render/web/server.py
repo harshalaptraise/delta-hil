@@ -60,7 +60,8 @@ def snapshot(plant, dt: float, cmds: dict) -> dict:
         "boxes": [[b["id"], float(b["x"]), int(b["fill"])] for b in plant.boxes],
         "ledger": {"picked": L["picked"], "placed": L["placed"], "passed": L["passed"],
                    "spawned": L["spawned"], "conserved": bool(plant.conserved()),
-                   "reach": int(plant.reach_violations)},
+                   "reach": int(plant.reach_violations),
+                   "rate": round(L["placed"] / max(plant.t, 1e-6) * 60.0, 1)},   # items/min
     }
 
 

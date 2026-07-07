@@ -29,6 +29,8 @@
 // plant is Z-up (metres); three.js is Y-up:  P2T(x,y,z) -> (x, z, -y)
 const P2T = (x,y,z)=>new THREE.Vector3(x, z, -y);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+// delta geometry (metres): base-joint radius, platform-joint radius, upper arm, forearm
+const RB=0.20, RP=0.05, LU=0.40, LF=1.00, YHAT=new THREE.Vector3(0,1,0);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0c0e11);
@@ -36,9 +38,9 @@ const cam = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.05, 100);
 const rnd = new THREE.WebGLRenderer({canvas:document.getElementById('cv'), antialias:true});
 rnd.setPixelRatio(Math.min(devicePixelRatio,2)); rnd.setSize(innerWidth,innerHeight);
 
-scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x20242b, 0.85));
-const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(2.5,4,2); scene.add(key);
-const fill = new THREE.DirectionalLight(0x9fb4ff, 0.35); fill.position.set(-2,2,-2.5); scene.add(fill);
+scene.add(new THREE.HemisphereLight(0xe6ecff, 0x262b33, 1.05));
+const key = new THREE.DirectionalLight(0xffffff, 1.15); key.position.set(2.5,4,2.5); scene.add(key);
+const fill = new THREE.DirectionalLight(0xa8bcff, 0.45); fill.position.set(-2.5,2,-2.5); scene.add(fill);
 
 const mat = (c,m=0.2,r=0.7)=>new THREE.MeshStandardMaterial({color:c,metalness:m,roughness:r});
 const M = { steel:mat(0x8a9099,0.75,0.5), brown:mat(0x6b4d31,0.0,0.92), green:mat(0x35b05a,0.0,0.8),
@@ -46,7 +48,7 @@ const M = { steel:mat(0x8a9099,0.75,0.5), brown:mat(0x6b4d31,0.0,0.92), green:ma
             rod:mat(0xb8bec6,0.6,0.4), floor:mat(0x2a2d33,0.0,1.0) };
 
 // ---- minimal orbit camera (no OrbitControls dependency) --------------------
-let az=0.7, el=0.42, rad=4.4, tgt=new THREE.Vector3(0,0.85,0), drag=false, px=0, py=0;
+let az=0.55, el=0.36, rad=4.0, tgt=new THREE.Vector3(0,0.62,0), drag=false, px=0, py=0;
 function placeCam(){
   cam.position.set(tgt.x + rad*Math.cos(el)*Math.sin(az),
                    tgt.y + rad*Math.sin(el),
@@ -72,23 +74,26 @@ function buildCell(cfg){
   const sb=cfg.src_belt, bb=cfg.box_belt;
   const src=boxMesh(sb.len, sb.w, 0.14, M.brown); src.position.copy(P2T(0, sb.y, sb.top-0.07)); scene.add(src);
   const box=boxMesh(bb.len, bb.w, 0.14, M.green); box.position.copy(P2T(0, bb.y, bb.top-0.07)); scene.add(box);
-  // robots: base disc + 3 mount posts + a tripod (rods) + plate + cup, tracked each frame
+  // robots: base disc + 3 delta arms (upper arm + parallelogram forearm) + platform + cup
   for(const r of cfg.robots){
     const g=new THREE.Group(); scene.add(g);
     const [rx,ry,rz]=r.base;
-    const baseP=P2T(rx,ry,rz);
-    const disc=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.05,28), M.steel);
-    disc.position.copy(baseP); g.add(disc);
-    const mounts=[], rods=[];
+    const BC=P2T(rx,ry,rz);
+    const disc=new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.24,0.05,32), M.steel);
+    disc.position.copy(BC); g.add(disc);
+    const arms=[];
     for(let a=0;a<3;a++){
       const phi=a*2*Math.PI/3;
-      const mp=P2T(rx+cfg.mount_r*Math.cos(phi), cfg.mount_r*Math.sin(phi), rz-0.03);
-      mounts.push(mp);
-      const rod=new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.016,1,10), M.rod); g.add(rod); rods.push(rod);
+      const u=new THREE.Vector3(Math.cos(phi),0,Math.sin(phi));
+      const B=BC.clone().add(u.clone().multiplyScalar(RB));
+      const upper=new THREE.Mesh(new THREE.CylinderGeometry(0.024,0.024,1,10), M.steel); g.add(upper);
+      const foreA=new THREE.Mesh(new THREE.CylinderGeometry(0.010,0.010,1,8), M.rod); g.add(foreA);
+      const foreB=new THREE.Mesh(new THREE.CylinderGeometry(0.010,0.010,1,8), M.rod); g.add(foreB);
+      arms.push({phi,u,B,upper,foreA,foreB});
     }
-    const plate=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.03,24), M.plate); g.add(plate);
-    const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.045,0.05,16), M.plate); g.add(cup);
-    robots.push({name:r.name, mounts, rods, plate, cup});
+    const plate=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.055,0.02,24), M.plate); g.add(plate);
+    const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.04,0.045,16), M.plate); g.add(cup);
+    robots.push({name:r.name, arms, plate, cup});
   }
 }
 
@@ -98,11 +103,24 @@ function poseRod(rod, a, b){                 // stretch a unit cylinder from a t
   rod.position.copy(mid); rod.scale.set(1,len,1);
   rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
 }
-function poseRobot(r, tcp){                    // tcp = plant [x,y,z]
-  const p=P2T(tcp[0],tcp[1],tcp[2]);
-  r.plate.position.copy(p);
-  r.cup.position.copy(p).add(new THREE.Vector3(0,-0.04,0));
-  for(let a=0;a<3;a++) poseRod(r.rods[a], r.mounts[a], p);
+function poseRobot(r, tcp){                    // tcp = plant [x,y,z]  (proper delta IK)
+  const P0=P2T(tcp[0],tcp[1],tcp[2]);
+  r.plate.position.copy(P0);
+  r.cup.position.copy(P0).add(new THREE.Vector3(0,-0.03,0));
+  for(const arm of r.arms){
+    const P=P0.clone().add(arm.u.clone().multiplyScalar(RP));   // platform joint
+    const D=P.clone().sub(arm.B);
+    // upper arm swings in plane(u, y):  E = B + LU*(cos*u - sin*ŷ); solve |E-P| = LF
+    const A=-2*LU*arm.u.dot(D), Bc=2*LU*YHAT.dot(D), C=LF*LF-LU*LU-D.lengthSq();
+    const mag=Math.hypot(A,Bc)||1e-6;
+    const psi=Math.atan2(Bc,A)+Math.acos(clamp(C/mag,-1,1));     // elbow-up solution
+    const E=arm.B.clone().add(arm.u.clone().multiplyScalar(LU*Math.cos(psi)))
+                         .add(YHAT.clone().multiplyScalar(-LU*Math.sin(psi)));
+    poseRod(arm.upper, arm.B, E);                                // upper arm
+    const t=new THREE.Vector3(-Math.sin(arm.phi),0,Math.cos(arm.phi)).multiplyScalar(0.018);
+    poseRod(arm.foreA, E.clone().add(t), P.clone().add(t));      // parallelogram forearm
+    poseRod(arm.foreB, E.clone().sub(t), P.clone().sub(t));
+  }
 }
 
 function tortMesh(){
@@ -146,7 +164,7 @@ function hud(s){
   document.getElementById('hud').innerHTML =
     `<b>delta-hil cell</b>  (${SRC})   t=${s.t.toFixed(1)}s\n`+
     `${rl}\n`+
-    `picked ${L.picked}  placed ${L.placed}  passed ${L.passed}\n`+
+    `placed ${L.placed}  <b>${L.rate}/min</b>   picked ${L.picked}  passed ${L.passed}\n`+
     `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;
 }
 const pcv=document.getElementById('plot'), pctx=pcv.getContext('2d');
@@ -190,7 +208,7 @@ function connect(){
 }
 fetch('/config.json').then(r=>r.json()).then(cfg=>{ buildCell(cfg); placeCam(); connect(); });
 
-(function loop(){ requestAnimationFrame(loop); if(!drag){ az+=0.0015; } placeCam(); rnd.render(scene,cam); })();
+(function loop(){ requestAnimationFrame(loop); if(!drag){ az+=0.0005; } placeCam(); rnd.render(scene,cam); })();
 </script>
 </body>
 </html>
