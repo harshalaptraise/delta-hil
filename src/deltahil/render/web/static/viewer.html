@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>delta-hil cell (web)</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0c0e11; color:#e8eaed;
+              font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; }
+  #cv { position:fixed; inset:0; display:block; }
+  #hud { position:fixed; top:12px; left:12px; padding:10px 12px; background:rgba(14,16,20,.72);
+         border:1px solid #3a3f47; border-radius:6px; white-space:pre; pointer-events:none; }
+  #hud b { color:#8fd6ff; } .ok{color:#57d98a;} .bad{color:#ff6b6b;}
+  #plot { position:fixed; top:12px; right:12px; background:rgba(14,16,20,.80);
+          border:1px solid #3a3f47; border-radius:6px; }
+  #boot { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+          background:#0c0e11; color:#9aa0a6; font-size:15px; z-index:10; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud">connecting…</div>
+<canvas id="plot" width="360" height="150"></canvas>
+<div id="boot">loading delta-hil cell…</div>
+<script src="/static/vendor/three.min.js"></script>
+<script>
+"use strict";
+// plant is Z-up (metres); three.js is Y-up:  P2T(x,y,z) -> (x, z, -y)
+const P2T = (x,y,z)=>new THREE.Vector3(x, z, -y);
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0e11);
+const cam = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.05, 100);
+const rnd = new THREE.WebGLRenderer({canvas:document.getElementById('cv'), antialias:true});
+rnd.setPixelRatio(Math.min(devicePixelRatio,2)); rnd.setSize(innerWidth,innerHeight);
+
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x20242b, 0.85));
+const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(2.5,4,2); scene.add(key);
+const fill = new THREE.DirectionalLight(0x9fb4ff, 0.35); fill.position.set(-2,2,-2.5); scene.add(fill);
+
+const mat = (c,m=0.2,r=0.7)=>new THREE.MeshStandardMaterial({color:c,metalness:m,roughness:r});
+const M = { steel:mat(0x8a9099,0.75,0.5), brown:mat(0x6b4d31,0.0,0.92), green:mat(0x35b05a,0.0,0.8),
+            tort:mat(0xeee7d6,0.0,0.85), tote:mat(0xb99a6e,0.0,0.9), plate:mat(0xcfd3d8,0.8,0.35),
+            rod:mat(0xb8bec6,0.6,0.4), floor:mat(0x2a2d33,0.0,1.0) };
+
+// ---- minimal orbit camera (no OrbitControls dependency) --------------------
+let az=0.7, el=0.42, rad=4.4, tgt=new THREE.Vector3(0,0.85,0), drag=false, px=0, py=0;
+function placeCam(){
+  cam.position.set(tgt.x + rad*Math.cos(el)*Math.sin(az),
+                   tgt.y + rad*Math.sin(el),
+                   tgt.z + rad*Math.cos(el)*Math.cos(az));
+  cam.lookAt(tgt);
+}
+addEventListener('resize', ()=>{ cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix(); rnd.setSize(innerWidth,innerHeight); });
+const cv=document.getElementById('cv');
+cv.addEventListener('pointerdown', e=>{drag=true;px=e.clientX;py=e.clientY;});
+addEventListener('pointerup', ()=>drag=false);
+addEventListener('pointermove', e=>{ if(!drag)return; az-=(e.clientX-px)*0.006; el=clamp(el+(e.clientY-py)*0.006,-0.2,1.4); px=e.clientX;py=e.clientY; });
+cv.addEventListener('wheel', e=>{ rad=clamp(rad*(1+Math.sign(e.deltaY)*0.08),1.8,10); e.preventDefault(); }, {passive:false});
+
+// ---- build the cell from /config.json --------------------------------------
+let CFG=null; const robots=[]; const tortPool=new Map(); const totePool=new Map();
+function boxMesh(w,d,h,material){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material); return m; }
+
+function buildCell(cfg){
+  CFG=cfg;
+  // floor
+  const fl=boxMesh(3.6,2.4,0.02,M.floor); fl.position.set(0,-0.01,0); scene.add(fl);
+  // belts (three: x = length, y = up, z = -plant_y)
+  const sb=cfg.src_belt, bb=cfg.box_belt;
+  const src=boxMesh(sb.len, sb.w, 0.14, M.brown); src.position.copy(P2T(0, sb.y, sb.top-0.07)); scene.add(src);
+  const box=boxMesh(bb.len, bb.w, 0.14, M.green); box.position.copy(P2T(0, bb.y, bb.top-0.07)); scene.add(box);
+  // robots: base disc + 3 mount posts + a tripod (rods) + plate + cup, tracked each frame
+  for(const r of cfg.robots){
+    const g=new THREE.Group(); scene.add(g);
+    const [rx,ry,rz]=r.base;
+    const baseP=P2T(rx,ry,rz);
+    const disc=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.05,28), M.steel);
+    disc.position.copy(baseP); g.add(disc);
+    const mounts=[], rods=[];
+    for(let a=0;a<3;a++){
+      const phi=a*2*Math.PI/3;
+      const mp=P2T(rx+cfg.mount_r*Math.cos(phi), cfg.mount_r*Math.sin(phi), rz-0.03);
+      mounts.push(mp);
+      const rod=new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.016,1,10), M.rod); g.add(rod); rods.push(rod);
+    }
+    const plate=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.03,24), M.plate); g.add(plate);
+    const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.045,0.05,16), M.plate); g.add(cup);
+    robots.push({name:r.name, mounts, rods, plate, cup});
+  }
+}
+
+function poseRod(rod, a, b){                 // stretch a unit cylinder from a to b
+  const mid=a.clone().add(b).multiplyScalar(0.5);
+  const dir=b.clone().sub(a); const len=dir.length();
+  rod.position.copy(mid); rod.scale.set(1,len,1);
+  rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+}
+function poseRobot(r, tcp){                    // tcp = plant [x,y,z]
+  const p=P2T(tcp[0],tcp[1],tcp[2]);
+  r.plate.position.copy(p);
+  r.cup.position.copy(p).add(new THREE.Vector3(0,-0.04,0));
+  for(let a=0;a<3;a++) poseRod(r.rods[a], r.mounts[a], p);
+}
+
+function tortMesh(){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(CFG.tortilla.r, CFG.tortilla.r, CFG.tortilla.h, 24), M.tort);
+  scene.add(m); return m;
+}
+function toteMesh(){
+  const g=new THREE.Group(); const t=CFG.tote, wall=0.015;
+  g.add(boxMesh(t.w, t.d, wall, M.tote));                         // floor (thin, y = wall)
+  const wxA=boxMesh(wall, t.d, t.h, M.tote); wxA.position.set(-t.w/2,t.h/2,0); g.add(wxA);
+  const wxB=boxMesh(wall, t.d, t.h, M.tote); wxB.position.set( t.w/2,t.h/2,0); g.add(wxB);
+  const wyA=boxMesh(t.w, wall, t.h, M.tote); wyA.position.set(0,t.h/2,-t.d/2); g.add(wyA);
+  const wyB=boxMesh(t.w, wall, t.h, M.tote); wyB.position.set(0,t.h/2, t.d/2); g.add(wyB);
+  scene.add(g); return g;
+}
+
+// ---- snapshot handling -----------------------------------------------------
+let SN=null;
+function applySnapshot(s){
+  SN=s; if(s.source) SRC=s.source;
+  for(const r of robots) if(s.rob[r.name]) poseRobot(r, s.rob[r.name]);
+  const liveT=new Set();
+  for(const [id,x,y,z] of s.parts){ liveT.add(id);
+    let m=tortPool.get(id); if(!m){ m=tortMesh(); tortPool.set(id,m); }
+    m.visible=true; m.position.copy(P2T(x,y,z));
+  }
+  for(const [id,m] of tortPool) if(!liveT.has(id)) m.visible=false;
+  const liveB=new Set();
+  for(const [id,x,fill] of s.boxes){ liveB.add(id);
+    let g=totePool.get(id); if(!g){ g=toteMesh(); totePool.set(id,g); }
+    g.visible=true; g.position.copy(P2T(x, CFG.box_belt.y, CFG.box_belt.top));
+  }
+  for(const [id,g] of totePool) if(!liveB.has(id)) g.visible=false;
+  hud(s); pushPlot(s);
+}
+
+// ---- HUD + vx overlay ------------------------------------------------------
+function hud(s){
+  const L=s.ledger, names=Object.keys(s.rob);
+  const rl=names.map(n=>`${n.slice(-1)}:${s.grip[n]?'HOLD':' — '} vx=${s.vx[n].toFixed(2)}`).join('   ');
+  document.getElementById('hud').innerHTML =
+    `<b>delta-hil cell</b>  (${SRC})   t=${s.t.toFixed(1)}s\n`+
+    `${rl}\n`+
+    `picked ${L.picked}  placed ${L.placed}  passed ${L.passed}\n`+
+    `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;
+}
+const pcv=document.getElementById('plot'), pctx=pcv.getContext('2d');
+const HIST=[]; const HN=180;                    // ~6 s at 30 Hz
+function pushPlot(s){
+  HIST.push({vx:{...s.vx}, matched:{...s.matched}, grip:{...s.grip}, vsrc:s.vsrc, vbox:s.vbox});
+  if(HIST.length>HN) HIST.shift();
+  drawPlot();
+}
+function drawPlot(){
+  const W=pcv.width,H=pcv.height, padL=8,padT=22,padB=16, gw=W-padL-10, gh=H-padT-padB, VMAX=0.35;
+  pctx.clearRect(0,0,W,H);
+  const vy=v=>padT+gh-(clamp(v,0,VMAX)/VMAX)*gh, xat=(i,n)=>padL+gw-(n-1-i)/Math.max(HN-1,1)*gw;
+  if(HIST.length){
+    const vsrc=HIST[HIST.length-1].vsrc, vbox=HIST[HIST.length-1].vbox;
+    pctx.strokeStyle='#5adc82'; pctx.lineWidth=1; line(padL,vy(vsrc),padL+gw,vy(vsrc));
+    pctx.strokeStyle='#5a96f0aa'; line(padL,vy(vbox),padL+gw,vy(vbox));
+    const cols={Robot_A:[90,220,245], Robot_B:[250,180,80]}, n=HIST.length;
+    for(const nm of Object.keys(cols)){
+      for(let i=1;i<n;i++){
+        const a=HIST[i-1],b=HIST[i]; if(a.vx[nm]==null||b.vx[nm]==null) continue;
+        const c=cols[nm], lock=b.matched[nm];
+        pctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${lock?1:0.33})`; pctx.lineWidth=lock?2.6:1;
+        line(xat(i-1,n),vy(a.vx[nm]),xat(i,n),vy(b.vx[nm]));
+      }
+      for(let i=1;i<n;i++){ if(HIST[i].grip[nm] && !HIST[i-1].grip[nm]){
+        pctx.fillStyle='#fff'; pctx.beginPath(); pctx.arc(xat(i,n),vy(HIST[HIST.length-1].vsrc),3,0,7); pctx.fill(); } }
+    }
+  }
+  pctx.fillStyle='#e8eaed'; pctx.font='11px monospace'; pctx.fillText('TCP vx (X) vs belt', padL, 14);
+  pctx.fillStyle='#5adc82'; pctx.fillText('belt', W-30, 14);
+}
+function line(x1,y1,x2,y2){ pctx.beginPath(); pctx.moveTo(x1,y1); pctx.lineTo(x2,y2); pctx.stroke(); }
+
+// ---- boot ------------------------------------------------------------------
+let SRC='mock';
+function connect(){
+  const ws=new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage=e=>{ if(document.getElementById('boot')) document.getElementById('boot').remove(); applySnapshot(JSON.parse(e.data)); };
+  ws.onclose=()=>setTimeout(connect,1000);
+}
+fetch('/config.json').then(r=>r.json()).then(cfg=>{ buildCell(cfg); placeCam(); connect(); });
+
+(function loop(){ requestAnimationFrame(loop); if(!drag){ az+=0.0015; } placeCam(); rnd.render(scene,cam); })();
+</script>
+</body>
+</html>
