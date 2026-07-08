@@ -57,6 +57,10 @@ def _model_xml() -> str:
     return f"""
 <mujoco model="delta_cell">
   <option timestep="{_SUBSTEP}" integrator="implicitfast"/>
+  <visual>
+    <global offwidth="1600" offheight="900"/>
+    <headlight diffuse="0.5 0.5 0.5" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+  </visual>
   <worldbody>
     <geom name="floor" type="plane" pos="0 0 0" size="5 4 .1" friction="1 .01 .001"/>
     <body name="srcbelt" pos="0 {cs.SRC_Y} {src_z:.3f}">
