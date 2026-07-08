@@ -4,15 +4,23 @@ Two guarantees that keep CI green and the seam honest:
   1. the module imports without the Isaac runtime (only instantiation needs it);
   2. the P3 grasp-confirm *logic* is correct independent of PhysX.
 """
+import importlib.util
+
 import pytest
 
 import deltahil.plant.isaac_plant as ip  # must import clean, no omni/isaacsim
+
+# On a rig with isaacsim installed, IsaacPlant(...) boots the runtime and fails on the
+# missing prim instead of the "no runtime" RuntimeError -- that guard is only observable
+# on a machine without the runtime, so skip it there (and avoid a needless Isaac boot).
+_ISAAC_PRESENT = importlib.util.find_spec("isaacsim") is not None
 
 
 def test_module_imports_without_isaac():
     assert hasattr(ip, "IsaacPlant")
 
 
+@pytest.mark.skipif(_ISAAC_PRESENT, reason="'no Isaac runtime' guard is unobservable when isaacsim is installed (rig)")
 def test_instantiation_without_runtime_raises_runtimeerror():
     with pytest.raises(RuntimeError, match="Isaac Sim runtime"):
         ip.IsaacPlant("/no/such/stage.usd")
