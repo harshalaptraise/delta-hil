@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>delta-hil cell (web)</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0c0e11; color:#e8eaed;
+              font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; }
+  #cv { position:fixed; inset:0; display:block; }
+  #hud { position:fixed; top:12px; left:12px; padding:10px 12px; background:rgba(14,16,20,.72);
+         border:1px solid #3a3f47; border-radius:6px; white-space:pre; pointer-events:none; }
+  #hud b { color:#8fd6ff; } .ok{color:#57d98a;} .bad{color:#ff6b6b;}
+  #plot { position:fixed; top:12px; right:12px; background:rgba(14,16,20,.80);
+          border:1px solid #3a3f47; border-radius:6px; }
+  #boot { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+          background:#0c0e11; color:#9aa0a6; font-size:15px; z-index:10; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud">connecting…</div>
+<canvas id="plot" width="360" height="150"></canvas>
+<div id="boot">loading delta-hil cell…</div>
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/GLTFLoader.js"></script>
+<script>
+"use strict";
+// plant is Z-up (metres); three.js is Y-up:  P2T(x,y,z) -> (x, z, -y)
+const P2T = (x,y,z)=>new THREE.Vector3(x, z, -y);
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+// delta geometry (metres): base-joint radius, platform-joint radius, upper arm, forearm
+const RB=0.20, RP=0.05, LU=0.40, LF=1.00, YHAT=new THREE.Vector3(0,1,0);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0e11);
+const cam = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.05, 100);
+const rnd = new THREE.WebGLRenderer({canvas:document.getElementById('cv'), antialias:true});
+rnd.setPixelRatio(Math.min(devicePixelRatio,2)); rnd.setSize(innerWidth,innerHeight);
+
+scene.add(new THREE.HemisphereLight(0xe6ecff, 0x262b33, 1.05));
+const key = new THREE.DirectionalLight(0xffffff, 1.15); key.position.set(2.5,4,2.5); scene.add(key);
+const fill = new THREE.DirectionalLight(0xa8bcff, 0.45); fill.position.set(-2.5,2,-2.5); scene.add(fill);
+
+const mat = (c,m=0.2,r=0.7)=>new THREE.MeshStandardMaterial({color:c,metalness:m,roughness:r});
+const M = { steel:mat(0x8a9099,0.75,0.5), brown:mat(0x6b4d31,0.0,0.92), green:mat(0x35b05a,0.0,0.8),
+            tort:mat(0xeee7d6,0.0,0.85), tote:mat(0xb99a6e,0.0,0.9), plate:mat(0xcfd3d8,0.8,0.35),
+            rod:mat(0xb8bec6,0.6,0.4), floor:mat(0x2a2d33,0.0,1.0) };
+
+// ---- minimal orbit camera (no OrbitControls dependency) --------------------
+let az=0.55, el=0.36, rad=4.0, tgt=new THREE.Vector3(0,0.62,0), drag=false, px=0, py=0;
+function placeCam(){
+  cam.position.set(tgt.x + rad*Math.cos(el)*Math.sin(az),
+                   tgt.y + rad*Math.sin(el),
+                   tgt.z + rad*Math.cos(el)*Math.cos(az));
+  cam.lookAt(tgt);
+}
+addEventListener('resize', ()=>{ cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix(); rnd.setSize(innerWidth,innerHeight); });
+const cv=document.getElementById('cv');
+cv.addEventListener('pointerdown', e=>{drag=true;px=e.clientX;py=e.clientY;});
+addEventListener('pointerup', ()=>drag=false);
+addEventListener('pointermove', e=>{ if(!drag)return; az-=(e.clientX-px)*0.006; el=clamp(el+(e.clientY-py)*0.006,-0.2,1.4); px=e.clientX;py=e.clientY; });
+cv.addEventListener('wheel', e=>{ rad=clamp(rad*(1+Math.sign(e.deltaY)*0.08),1.8,10); e.preventDefault(); }, {passive:false});
+
+// ---- build the cell from /config.json --------------------------------------
+let CFG=null, MODE='stylized'; const robots=[]; const tortPool=new Map(); const totePool=new Map();
+function boxMesh(w,d,h,material){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material); return m; }
+
+// ===== real ABB IRB 360 CAD articulation (only when robot_model==='real') =====
+// ports src/deltahil/plant/irb360_pose.py -- metres, robot-local frame (z down).
+const V=(x,y,z)=>new THREE.Vector3(x,y,z);
+const K={ RM:0.175, ZM:-0.263, HE1:V(0.682,0,-0.299), HA1:V(0.066,0,-1.144), HP:V(-0.010,0,-1.187),
+          PTOP:V(0,0,-0.148), PBOT:V(0,0,-1.178), ARMS:{1:0,2:240,3:120} };
+K.AOFF=K.HA1.clone().sub(K.HP);
+K.RF=K.HE1.clone().sub(V(K.RM,0,K.ZM)).length();
+K.RE=K.HA1.clone().sub(K.HE1).length();
+const ARM_LA={1:['LA1_CL','LA1_CU','LA1_1','LA1_2'],2:['LA2_CL','LA2_CU','LA2_1','LA2_2'],3:['LA3_CL','LA3_CU','LA3_1','LA3_2']};
+const CENTRAL={RevoluteLinkUpper:-0.577, RevoluteLinkLower:-0.745, RevoluteLinkPlate:-1.178};
+const PARTS=['BASE','MovingPlate','RevoluteLinkBase','RevoluteLinkUpper','RevoluteLinkLower','RevoluteLinkPlate',
+  'UA1','UA2','UA3'].concat(ARM_LA[1],ARM_LA[2],ARM_LA[3]);
+const rotzV=(p,deg)=>{const c=Math.cos(deg*Math.PI/180),s=Math.sin(deg*Math.PI/180);return V(p.x*c-p.y*s,p.x*s+p.y*c,p.z);};
+function solveElbow(P,u_r,attach,homeE){
+  const z=V(0,0,1), d=attach.clone().sub(P), a=d.dot(u_r), b=d.dot(z), Rr=Math.hypot(a,b);
+  const c=clamp((K.RF*K.RF+a*a+b*b-K.RE*K.RE)/(2*K.RF*Rr),-1,1), psi=Math.atan2(b,a);
+  let best=null,bd=1e18;
+  for(const sg of [1,-1]){ const th=-psi+sg*Math.acos(c);
+    const E=P.clone().add(u_r.clone().multiplyScalar(K.RF*Math.cos(th))).add(z.clone().multiplyScalar(-K.RF*Math.sin(th)));
+    const dd=E.clone().sub(homeE).length(); if(dd<bd){best=E;bd=dd;} }
+  return best;
+}
+const T3=(x,y,z)=>new THREE.Matrix4().makeTranslation(x,y,z);
+function mAbout(pivot,vf,vt){    // rotate about pivot mapping vf->vt (column convention)
+  const q=new THREE.Quaternion().setFromUnitVectors(vf.clone().normalize(),vt.clone().normalize());
+  return T3(pivot.x,pivot.y,pivot.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(T3(-pivot.x,-pivot.y,-pivot.z));
+}
+function frameM(d,w){ const dh=d.clone().normalize(); let wh=w.clone().sub(dh.clone().multiplyScalar(w.dot(dh))).normalize();
+  return new THREE.Matrix4().makeBasis(dh,wh,dh.clone().cross(wh)); }
+function mFrame(hE,hA,E,attach,width){   // map segment (hE->hA, width) onto (E->attach, width)
+  const R=frameM(attach.clone().sub(E),width).multiply(frameM(hA.clone().sub(hE),width).transpose());
+  return T3(E.x,E.y,E.z).multiply(R).multiply(T3(-hE.x,-hE.y,-hE.z));
+}
+function setM(o,M){ if(o){ o.matrix.copy(M); } }
+function buildRealRobots(cfg){
+  const loader=new THREE.GLTFLoader();
+  for(const r of cfg.robots){
+    const [rx,ry,rz]=r.base;
+    const G=new THREE.Group(); G.position.set(rx,rz,0); G.rotation.x=-Math.PI/2; scene.add(G);  // local(m,z-down)->three
+    const entry={name:r.name, G, parts:{}, ready:false, loaded:0}; robots.push(entry);
+    for(const pn of PARTS){
+      loader.load(`/static/robot/${pn}.glb`, gltf=>{
+        const o=gltf.scene; o.traverse(m=>{ if(m.isMesh) m.material=M.plate; });
+        o.matrixAutoUpdate=false; entry.parts[pn]=o; G.add(o);
+        if(++entry.loaded===PARTS.length) entry.ready=true;
+      }, undefined, e=>console.warn('glb load failed',pn));
+    }
+  }
+}
+function poseRobotReal(r, tcp){
+  if(!r.ready) return;
+  const T=V(tcp[0]-r.G.position.x, tcp[1], tcp[2]-CFG.base_z);   // target in robot-local metres
+  for(const i of [1,2,3]){
+    const phi=K.ARMS[i], u_r=rotzV(V(1,0,0),phi);
+    const P=V(K.RM*u_r.x, K.RM*u_r.y, K.ZM);
+    const A=V(-Math.sin(phi*Math.PI/180), Math.cos(phi*Math.PI/180), 0);
+    const homeE=rotzV(K.HE1,phi), homeA=rotzV(K.HA1,phi), attach=T.clone().add(rotzV(K.AOFF,phi));
+    const E=solveElbow(P,u_r,attach,homeE);
+    setM(r.parts['UA'+i], mAbout(P, homeE.clone().sub(P), E.clone().sub(P)));
+    const Mf=mFrame(homeE,homeA,E,attach,A);
+    for(const la of ARM_LA[i]) setM(r.parts[la], Mf);
+  }
+  setM(r.parts['MovingPlate'], T3(T.x-K.HP.x, T.y-K.HP.y, T.z-K.HP.z));
+  const q=new THREE.Quaternion().setFromUnitVectors(K.PBOT.clone().sub(K.PTOP).normalize(), T.clone().sub(K.PTOP).normalize());
+  const R=new THREE.Matrix4().makeRotationFromQuaternion(q);
+  for(const name in CENTRAL){ const zh=CENTRAL[name], t=(zh-K.PTOP.z)/(K.PBOT.z-K.PTOP.z);
+    const Cn=K.PTOP.clone().add(T.clone().sub(K.PTOP).multiplyScalar(t));
+    setM(r.parts[name], T3(Cn.x,Cn.y,Cn.z).multiply(R).multiply(T3(0,0,-zh))); }
+}
+
+function buildCell(cfg){
+  CFG=cfg; MODE=cfg.robot_model||'stylized';
+  // floor
+  const fl=boxMesh(3.6,2.4,0.02,M.floor); fl.position.set(0,-0.01,0); scene.add(fl);
+  // belts (three: x = length, y = up, z = -plant_y)
+  const sb=cfg.src_belt, bb=cfg.box_belt;
+  const src=boxMesh(sb.len, sb.w, 0.14, M.brown); src.position.copy(P2T(0, sb.y, sb.top-0.07)); scene.add(src);
+  const box=boxMesh(bb.len, bb.w, 0.14, M.green); box.position.copy(P2T(0, bb.y, bb.top-0.07)); scene.add(box);
+  if(MODE==='real'){ buildRealRobots(cfg); return; }
+  // robots (stylized): base disc + 3 delta arms (upper arm + parallelogram forearm) + platform + cup
+  for(const r of cfg.robots){
+    const g=new THREE.Group(); scene.add(g);
+    const [rx,ry,rz]=r.base;
+    const BC=P2T(rx,ry,rz);
+    const disc=new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.24,0.05,32), M.steel);
+    disc.position.copy(BC); g.add(disc);
+    const arms=[];
+    for(let a=0;a<3;a++){
+      const phi=a*2*Math.PI/3;
+      const u=new THREE.Vector3(Math.cos(phi),0,Math.sin(phi));
+      const B=BC.clone().add(u.clone().multiplyScalar(RB));
+      const upper=new THREE.Mesh(new THREE.CylinderGeometry(0.024,0.024,1,10), M.steel); g.add(upper);
+      const foreA=new THREE.Mesh(new THREE.CylinderGeometry(0.010,0.010,1,8), M.rod); g.add(foreA);
+      const foreB=new THREE.Mesh(new THREE.CylinderGeometry(0.010,0.010,1,8), M.rod); g.add(foreB);
+      arms.push({phi,u,B,upper,foreA,foreB});
+    }
+    const plate=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.055,0.02,24), M.plate); g.add(plate);
+    const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.04,0.045,16), M.plate); g.add(cup);
+    robots.push({name:r.name, arms, plate, cup});
+  }
+}
+
+function poseRod(rod, a, b){                 // stretch a unit cylinder from a to b
+  const mid=a.clone().add(b).multiplyScalar(0.5);
+  const dir=b.clone().sub(a); const len=dir.length();
+  rod.position.copy(mid); rod.scale.set(1,len,1);
+  rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+}
+function poseRobot(r, tcp){                    // tcp = plant [x,y,z]  (proper delta IK)
+  const P0=P2T(tcp[0],tcp[1],tcp[2]);
+  r.plate.position.copy(P0);
+  r.cup.position.copy(P0).add(new THREE.Vector3(0,-0.03,0));
+  for(const arm of r.arms){
+    const P=P0.clone().add(arm.u.clone().multiplyScalar(RP));   // platform joint
+    const D=P.clone().sub(arm.B);
+    // upper arm swings in plane(u, y):  E = B + LU*(cos*u - sin*ŷ); solve |E-P| = LF
+    const A=-2*LU*arm.u.dot(D), Bc=2*LU*YHAT.dot(D), C=LF*LF-LU*LU-D.lengthSq();
+    const mag=Math.hypot(A,Bc)||1e-6;
+    const psi=Math.atan2(Bc,A)+Math.acos(clamp(C/mag,-1,1));     // elbow-up solution
+    const E=arm.B.clone().add(arm.u.clone().multiplyScalar(LU*Math.cos(psi)))
+                         .add(YHAT.clone().multiplyScalar(-LU*Math.sin(psi)));
+    poseRod(arm.upper, arm.B, E);                                // upper arm
+    const t=new THREE.Vector3(-Math.sin(arm.phi),0,Math.cos(arm.phi)).multiplyScalar(0.018);
+    poseRod(arm.foreA, E.clone().add(t), P.clone().add(t));      // parallelogram forearm
+    poseRod(arm.foreB, E.clone().sub(t), P.clone().sub(t));
+  }
+}
+
+function tortMesh(){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(CFG.tortilla.r, CFG.tortilla.r, CFG.tortilla.h, 24), M.tort);
+  scene.add(m); return m;
+}
+function toteMesh(){
+  const g=new THREE.Group(); const t=CFG.tote, wall=0.015;
+  g.add(boxMesh(t.w, t.d, wall, M.tote));                         // floor (thin, y = wall)
+  const wxA=boxMesh(wall, t.d, t.h, M.tote); wxA.position.set(-t.w/2,t.h/2,0); g.add(wxA);
+  const wxB=boxMesh(wall, t.d, t.h, M.tote); wxB.position.set( t.w/2,t.h/2,0); g.add(wxB);
+  const wyA=boxMesh(t.w, wall, t.h, M.tote); wyA.position.set(0,t.h/2,-t.d/2); g.add(wyA);
+  const wyB=boxMesh(t.w, wall, t.h, M.tote); wyB.position.set(0,t.h/2, t.d/2); g.add(wyB);
+  scene.add(g); return g;
+}
+
+// ---- snapshot handling -----------------------------------------------------
+let SN=null;
+function applySnapshot(s){
+  SN=s; if(s.source) SRC=s.source;
+  for(const r of robots) if(s.rob[r.name]) (MODE==='real'?poseRobotReal:poseRobot)(r, s.rob[r.name]);
+  const liveT=new Set();
+  for(const [id,x,y,z] of s.parts){ liveT.add(id);
+    let m=tortPool.get(id); if(!m){ m=tortMesh(); tortPool.set(id,m); }
+    m.visible=true; m.position.copy(P2T(x,y,z));
+  }
+  for(const [id,m] of tortPool) if(!liveT.has(id)) m.visible=false;
+  const liveB=new Set();
+  for(const [id,x,fill] of s.boxes){ liveB.add(id);
+    let g=totePool.get(id); if(!g){ g=toteMesh(); totePool.set(id,g); }
+    g.visible=true; g.position.copy(P2T(x, CFG.box_belt.y, CFG.box_belt.top));
+  }
+  for(const [id,g] of totePool) if(!liveB.has(id)) g.visible=false;
+  hud(s); pushPlot(s);
+}
+
+// ---- HUD + vx overlay ------------------------------------------------------
+function hud(s){
+  const L=s.ledger, names=Object.keys(s.rob);
+  const rl=names.map(n=>`${n.slice(-1)}:${s.grip[n]?'HOLD':' — '} vx=${s.vx[n].toFixed(2)}`).join('   ');
+  document.getElementById('hud').innerHTML =
+    `<b>delta-hil cell</b>  (${SRC})   t=${s.t.toFixed(1)}s\n`+
+    `${rl}\n`+
+    `placed ${L.placed}  <b>${L.rate}/min</b>   picked ${L.picked}  passed ${L.passed}\n`+
+    `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;
+}
+const pcv=document.getElementById('plot'), pctx=pcv.getContext('2d');
+const HIST=[]; const HN=180;                    // ~6 s at 30 Hz
+function pushPlot(s){
+  HIST.push({vx:{...s.vx}, matched:{...s.matched}, grip:{...s.grip}, vsrc:s.vsrc, vbox:s.vbox});
+  if(HIST.length>HN) HIST.shift();
+  drawPlot();
+}
+function drawPlot(){
+  const W=pcv.width,H=pcv.height, padL=8,padT=22,padB=16, gw=W-padL-10, gh=H-padT-padB, VMAX=0.35;
+  pctx.clearRect(0,0,W,H);
+  const vy=v=>padT+gh-(clamp(v,0,VMAX)/VMAX)*gh, xat=(i,n)=>padL+gw-(n-1-i)/Math.max(HN-1,1)*gw;
+  if(HIST.length){
+    const vsrc=HIST[HIST.length-1].vsrc, vbox=HIST[HIST.length-1].vbox;
+    pctx.strokeStyle='#5adc82'; pctx.lineWidth=1; line(padL,vy(vsrc),padL+gw,vy(vsrc));
+    pctx.strokeStyle='#5a96f0aa'; line(padL,vy(vbox),padL+gw,vy(vbox));
+    const cols={Robot_A:[90,220,245], Robot_B:[250,180,80]}, n=HIST.length;
+    for(const nm of Object.keys(cols)){
+      for(let i=1;i<n;i++){
+        const a=HIST[i-1],b=HIST[i]; if(a.vx[nm]==null||b.vx[nm]==null) continue;
+        const c=cols[nm], lock=b.matched[nm];
+        pctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${lock?1:0.33})`; pctx.lineWidth=lock?2.6:1;
+        line(xat(i-1,n),vy(a.vx[nm]),xat(i,n),vy(b.vx[nm]));
+      }
+      for(let i=1;i<n;i++){ if(HIST[i].grip[nm] && !HIST[i-1].grip[nm]){
+        pctx.fillStyle='#fff'; pctx.beginPath(); pctx.arc(xat(i,n),vy(HIST[HIST.length-1].vsrc),3,0,7); pctx.fill(); } }
+    }
+  }
+  pctx.fillStyle='#e8eaed'; pctx.font='11px monospace'; pctx.fillText('TCP vx (X) vs belt', padL, 14);
+  pctx.fillStyle='#5adc82'; pctx.fillText('belt', W-30, 14);
+}
+function line(x1,y1,x2,y2){ pctx.beginPath(); pctx.moveTo(x1,y1); pctx.lineTo(x2,y2); pctx.stroke(); }
+
+// ---- boot ------------------------------------------------------------------
+let SRC='mock';
+function connect(){
+  const ws=new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage=e=>{ if(document.getElementById('boot')) document.getElementById('boot').remove(); applySnapshot(JSON.parse(e.data)); };
+  ws.onclose=()=>setTimeout(connect,1000);
+}
+fetch('/config.json').then(r=>r.json()).then(cfg=>{ buildCell(cfg);
+  if(MODE==='real'){ rad=5.8; el=0.28; tgt.set(0,0.95,0); }   // taller real robots need room
+  placeCam(); connect(); });
+
+(function loop(){ requestAnimationFrame(loop); if(!drag){ az+=0.0005; } placeCam(); rnd.render(scene,cam); })();
+</script>
+</body>
+</html>
