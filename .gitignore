@@ -19,4 +19,3 @@ assets/*.csv
 # rapier: node deps are vendored under render/rapier/vendor (offline); npm artifacts are not committed
 src/deltahil/render/rapier/node_modules/
 src/deltahil/render/rapier/package-lock.json
-assets/digital-twin-course.html
