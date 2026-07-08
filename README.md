@@ -12,6 +12,8 @@ stealing: the **plant and the renderer are swappable behind one _unchanged_ cont
 the same `cell_controller` and TwinCAT program drive **Isaac Sim** (RTX), a **GPU-free
 browser** viewer, **MuJoCo** contact physics, and **Rapier** (WASM) physics.
 
+📚 **[Interactive digital-twin course →](https://harshalaptraise.github.io/delta-hil/course/)** — a guided walkthrough of the ideas and the build.
+
 ## Quick start — laptop, no GPU, no PLC
 
 **Install what you'll run** — each backend is its own extra (they combine, e.g. `".[web,mujoco,dev]"`):
