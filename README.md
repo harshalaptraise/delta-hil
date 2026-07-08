@@ -14,10 +14,23 @@ browser** viewer, **MuJoCo** contact physics, and **Rapier** (WASM) physics.
 
 ## Quick start — laptop, no GPU, no PLC
 
+**Install what you'll run** — each backend is its own extra (they combine, e.g. `".[web,mujoco,dev]"`):
+
+| To run | Install |
+|--------|---------|
+| Browser viewer + **kinematic** plant (default) | `pip install -e ".[web]"` |
+| …with **MuJoCo** physics (`--plant mujoco`) | `pip install -e ".[web,mujoco]"` |
+| …with **Rapier** physics (`--plant rapier`) | `pip install -e ".[web]"` **plus** `node` on PATH (WASM is vendored — no npm) |
+| The **test suite** (`pytest`) | add `dev` → `pip install -e ".[web,dev]"` |
+| Drive any of them from a **live TwinCAT PLC** (`--plc`) | add `twincat` (`pyads`) → `".[web,twincat]"` |
+| Full-fidelity **Isaac** render | Isaac Sim 5.1 (installed out-of-band) + an RTX GPU — see [Run on the rig](#run-on-the-rig--isaac--live-twincat) |
+
+**Run** (installs the tests too, so the line below works as written):
+
 ```bash
-pip install -e ".[web]"
-pytest -q                                   # 50 tests: plant, controller, velocity-match, calibration
-python scripts/run_web_cell.py --realbot    # → open http://127.0.0.1:8080
+pip install -e ".[web,dev]"
+python -m pytest -q                          # 40 tests pass (+5 with the [mujoco] extra, +5 more with node → 50)
+python scripts/run_web_cell.py --realbot     # → open http://127.0.0.1:8080
 ```
 
 The browser shows the two real-CAD ABB deltas tracking the belt and dropping tortillas into
@@ -27,13 +40,13 @@ add a flag at a time; every combination is valid:
 ```bash
 python scripts/run_web_cell.py                                       # stylized delta, mock controller (instant, no CAD)
 python scripts/run_web_cell.py --realbot                             #   + the real ABB IRB 360 CAD
-python scripts/run_web_cell.py --realbot --plant mujoco              #   + real MuJoCo physics — tortillas pile in totes¹
+python scripts/run_web_cell.py --realbot --plant mujoco              #   + MuJoCo physics — needs the [mujoco] extra
 python scripts/run_web_cell.py --realbot --plant rapier              #   + Rapier (WASM) physics — needs `node` on PATH
 python scripts/run_web_cell.py --realbot --plant mujoco --native     #   + MuJoCo's own contact-debug window
 python scripts/run_web_cell.py --realbot --plant mujoco --plc <AMS>  #   + driven by the LIVE TwinCAT PLC over ADS
 ```
-¹ `--plant mujoco` needs `pip install -e ".[mujoco]"`. Full-fidelity **Isaac** render (RTX GPU):
-`python scripts/run_twincat_cell.py mock`. Any `--plant` works with or without `--realbot` / `--plc`.
+Full-fidelity **Isaac** render (RTX GPU): `python scripts/run_twincat_cell.py mock`. Any `--plant`
+works with or without `--realbot` / `--plc`.
 
 > The controller is real, its program is unchanged from sim to bench, and the sim reads the
 > controller's own clock — swapping the plant or the renderer never touches it.
@@ -123,7 +136,7 @@ window to **freeze** the cell live; set `VPLOT = False` for a clean beauty rende
 
 | Command | Where | Needs | What you get |
 |---|---|---|---|
-| `pytest -q` | laptop | nothing | 50 tests pass (40 without the `[mujoco]` extra / `node`) |
+| `python -m pytest -q` | laptop | `[dev]` (+ `[mujoco]` / `node` for all 50) | 40 tests pass; 50 with MuJoCo + node |
 | `python -m deltahil.run` | laptop | nothing | mock HIL loop + eval-10 calibration self-score |
 | **`python scripts/run_web_cell.py`** | laptop | `[web]` | **GPU-free browser viewer of the cell (stylized delta)** |
 | `python scripts/run_web_cell.py --realbot` | laptop | `[web]` | …with the real ABB IRB 360 CAD (on-demand glTF) |
@@ -145,14 +158,14 @@ window to **freeze** the cell live; set `VPLOT = False` for a clean beauty rende
 
 ## Prerequisites
 
-The **web viewer (tier 1)** needs none of the rig — just `pip install -e ".[web]"` on any
-laptop (Python 3.10+, no GPU, no Windows). Everything below is for the Isaac / TwinCAT tiers.
+The **browser viewer** (Quick start) needs none of the rig — just `pip install -e ".[web]"` on any
+laptop (Python 3.10+, no GPU, no Windows). Everything below is only for the Isaac / live-TwinCAT rungs.
 
-- **GPU workstation** — Windows + an NVIDIA **RTX** GPU (developed on an RTX 4090) — Isaac tiers only.
+- **GPU workstation** — Windows + an NVIDIA **RTX** GPU (developed on an RTX 4090) — Isaac renders only.
 - **NVIDIA Isaac Sim 5.1**, installed out-of-band; run scripts inside its Python
   environment (`isaacenv`). The scripts import clean on a laptop but only *run* the
   render/loop under Isaac.
-- **Beckhoff TwinCAT 3** runtime (for the live tiers 3–4) with an **ADS route** to this
+- **Beckhoff TwinCAT 3** runtime (for the live rungs 2–3) with an **ADS route** to this
   machine, and the relevant PLC program from `docs/` loaded, built, and **activated
   (RUN)**. The ST programs live in `docs/*.md` — paste each POU into the matching
   TwinCAT pane (mind the `FUNCTION_BLOCK`/`PROGRAM` headers).
