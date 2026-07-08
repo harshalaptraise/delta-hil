@@ -82,9 +82,13 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
     """Advance the cell in real time and broadcast at ~30 Hz. Mock controller by
     default; live TwinCAT over ADS if `plc_ams` is given (blocking ADS runs in a
     thread so the event loop keeps serving)."""
-    if app.get("plant_kind") == "mujoco":
+    kind = app.get("plant_kind")
+    if kind == "mujoco":
         from ...plant.mujoco_cell_plant import MuJoCoCellPlant
         plant = MuJoCoCellPlant()
+    elif kind == "rapier":
+        from ...plant.rapier_cell_plant import RapierCellPlant
+        plant = RapierCellPlant()
     else:
         plant = CellPlant()
     native = None
@@ -143,6 +147,8 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
             link.close()
         if native is not None:
             native.close()
+        if hasattr(plant, "close"):
+            plant.close()                       # shut down the Rapier node worker
         raise
 
 
