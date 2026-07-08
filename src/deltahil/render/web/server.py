@@ -56,7 +56,8 @@ def snapshot(plant, dt: float, cmds: dict) -> dict:
         "t": round(plant.t, 3),
         "rob": rob, "vx": vx, "vcmd": vc, "grip": grip, "matched": matched,
         "vsrc": float(plant.vs), "vbox": float(plant.vb),
-        "parts": [[p["id"], float(p["x"]), float(p["y"]), float(p["z"])] for p in plant.parts],
+        "parts": [[p["id"], float(p["x"]), float(p["y"]), float(p["z"])] + list(p.get("quat", (1, 0, 0, 0)))
+                  for p in plant.parts],
         "boxes": [[b["id"], float(b["x"]), int(b["fill"])] for b in plant.boxes],
         "ledger": {"picked": L["picked"], "placed": L["placed"], "passed": L["passed"],
                    "spawned": L["spawned"], "conserved": bool(plant.conserved()),
@@ -81,7 +82,18 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
     """Advance the cell in real time and broadcast at ~30 Hz. Mock controller by
     default; live TwinCAT over ADS if `plc_ams` is given (blocking ADS runs in a
     thread so the event loop keeps serving)."""
-    plant = CellPlant()
+    if app.get("plant_kind") == "mujoco":
+        from ...plant.mujoco_cell_plant import MuJoCoCellPlant
+        plant = MuJoCoCellPlant()
+    else:
+        plant = CellPlant()
+    native = None
+    if app.get("native") and app.get("plant_kind") == "mujoco":
+        try:
+            import mujoco.viewer
+            native = mujoco.viewer.launch_passive(plant.m, plant.d)
+        except Exception as exc:
+            print(f"[web] --native MuJoCo window unavailable ({exc})")
     link = ctrl = None
     if plc_ams:
         from ...plc.cell_link import CellAdsLink
@@ -92,7 +104,8 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
 
     last_cmds: dict = {}
     prev = time.monotonic()
-    acc, prev_plc = 0.0, None
+    acc = 0.0
+    rtt_ms = 0.0                                     # ADS round-trip (EMA), for the readout
     try:
         while True:
             now = time.monotonic()
@@ -108,21 +121,28 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
                     def _io():                          # blocking ADS round-trip
                         link.write_sensors(sensors)
                         return link.read_commands()
-                    last_cmds, enable, plc_ns = await asyncio.to_thread(_io)
-                    rdt = ((plc_ns - prev_plc) / 1e9 if plc_ns and prev_plc else DT)
-                    rdt = min(max(rdt, 0.0), 0.05)
-                    prev_plc = plc_ns
+                    t0 = time.monotonic()
+                    last_cmds, enable, _plc_ns = await asyncio.to_thread(_io)
+                    rtt_ms = 0.9 * rtt_ms + 0.1 * (time.monotonic() - t0) * 1e3
                     plant.apply_commands(last_cmds)
-                    if enable and rdt > 0.0:
-                        plant.step(rdt)
+                    if enable:                          # advance by REAL wall time, not the PLC
+                        plant.step(DT)                  # clock delta -> vx is measured over the
+                                                        # same tick it's drawn on, and the cell
+                                                        # runs real-time (enable:=FALSE freezes it)
                 acc -= DT
             snap = snapshot(plant, DT, last_cmds)
             snap["source"] = app.get("source", "mock controller")
+            if link is not None:
+                snap["rtt_ms"] = round(rtt_ms, 2)
             await _broadcast(app, snap)
+            if native is not None and native.is_running():
+                native.sync()
             await asyncio.sleep(1.0 / SNAP_HZ)
     except asyncio.CancelledError:
         if link is not None:
             link.close()
+        if native is not None:
+            native.close()
         raise
 
 
@@ -147,10 +167,13 @@ async def _ws(request):
     return ws
 
 
-def make_app(plc_ams: str | None = None, robot: str = "stylized") -> web.Application:
+def make_app(plc_ams: str | None = None, robot: str = "stylized",
+             plant_kind: str = "kinematic", native: bool = False) -> web.Application:
     app = web.Application()
     app["clients"] = set()
     app["robot"] = robot
+    app["plant_kind"] = plant_kind
+    app["native"] = native
     app.router.add_get("/", _index)
     app.router.add_get("/config.json", _config)
     app.router.add_get("/ws", _ws)
@@ -172,7 +195,8 @@ def make_app(plc_ams: str | None = None, robot: str = "stylized") -> web.Applica
 
 
 def serve(host: str = "127.0.0.1", port: int = 8080, plc_ams: str | None = None,
-          robot: str = "stylized") -> None:
+          robot: str = "stylized", plant_kind: str = "kinematic", native: bool = False) -> None:
     print(f"[web] delta-hil cell viewer -> http://{host}:{port}  "
-          f"({'live TwinCAT ' + plc_ams if plc_ams else 'mock controller'}, robot={robot})")
-    web.run_app(make_app(plc_ams, robot), host=host, port=port, print=None)
+          f"({'live TwinCAT ' + plc_ams if plc_ams else 'mock controller'}, "
+          f"robot={robot}, plant={plant_kind})")
+    web.run_app(make_app(plc_ams, robot, plant_kind, native), host=host, port=port, print=None)

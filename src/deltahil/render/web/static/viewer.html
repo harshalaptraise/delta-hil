@@ -32,6 +32,10 @@ const P2T = (x,y,z)=>new THREE.Vector3(x, z, -y);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 // delta geometry (metres): base-joint radius, platform-joint radius, upper arm, forearm
 const RB=0.20, RP=0.05, LU=0.40, LF=1.00, YHAT=new THREE.Vector3(0,1,0);
+// plant(z-up) -> three(y-up) is rotateX(-90 deg); map a plant quaternion into three by conjugation
+const QMAP=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),-Math.PI/2);
+function threeQuat(w,x,y,z){ const q=new THREE.Quaternion(x,y,z,w);
+  return QMAP.clone().multiply(q).multiply(QMAP.clone().invert()); }
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0c0e11);
@@ -215,9 +219,10 @@ function applySnapshot(s){
   SN=s; if(s.source) SRC=s.source;
   for(const r of robots) if(s.rob[r.name]) (MODE==='real'?poseRobotReal:poseRobot)(r, s.rob[r.name]);
   const liveT=new Set();
-  for(const [id,x,y,z] of s.parts){ liveT.add(id);
+  for(const pt of s.parts){ const id=pt[0]; liveT.add(id);
     let m=tortPool.get(id); if(!m){ m=tortMesh(); tortPool.set(id,m); }
-    m.visible=true; m.position.copy(P2T(x,y,z));
+    m.visible=true; m.position.copy(P2T(pt[1],pt[2],pt[3]));
+    if(pt.length>=8) m.quaternion.copy(threeQuat(pt[4],pt[5],pt[6],pt[7]));   // mujoco: tumble
   }
   for(const [id,m] of tortPool) if(!liveT.has(id)) m.visible=false;
   const liveB=new Set();
@@ -234,7 +239,7 @@ function hud(s){
   const L=s.ledger, names=Object.keys(s.rob);
   const rl=names.map(n=>`${n.slice(-1)}:${s.grip[n]?'HOLD':' — '} vx=${s.vx[n].toFixed(2)}`).join('   ');
   document.getElementById('hud').innerHTML =
-    `<b>delta-hil cell</b>  (${SRC})   t=${s.t.toFixed(1)}s\n`+
+    `<b>delta-hil cell</b>  (${SRC})${s.rtt_ms!=null?`  ADS ${s.rtt_ms.toFixed(1)} ms`:''}   t=${s.t.toFixed(1)}s\n`+
     `${rl}\n`+
     `placed ${L.placed}  <b>${L.rate}/min</b>   picked ${L.picked}  passed ${L.passed}\n`+
     `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;

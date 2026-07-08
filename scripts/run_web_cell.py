@@ -24,8 +24,13 @@ def main() -> int:
                     help="drive the cell with a live TwinCAT PLC over ADS (else mock)")
     ap.add_argument("--realbot", action="store_true",
                     help="render the real ABB IRB 360 CAD (loads ~3 MB glTF); else a light delta")
+    ap.add_argument("--plant", choices=["kinematic", "mujoco"], default="kinematic",
+                    help="physics backend: kinematic (default) or mujoco (real contact dynamics)")
+    ap.add_argument("--native", action="store_true",
+                    help="also open MuJoCo's own viewer window (--plant mujoco only)")
     args = ap.parse_args()
-    serve(args.host, args.port, args.plc, "real" if args.realbot else "stylized")
+    serve(args.host, args.port, args.plc, "real" if args.realbot else "stylized",
+          args.plant, args.native)
     return 0
 
 

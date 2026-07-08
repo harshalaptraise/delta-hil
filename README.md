@@ -10,7 +10,13 @@
   <img src="docs/hilweb.gif" width="760" alt="The same cell rendered GPU-free in a browser with the real ABB IRB 360 CAD">
 </p>
 
-<p align="center"><em>…and the <strong>same cell, same PLC code</strong>, rendered <strong>GPU-free in a browser</strong> — this <code>hilweb</code> branch swaps Isaac Sim for a Three.js/WebSocket viewer. <code>--realbot</code> loads the actual ABB IRB 360 CAD on demand (shown); the default is a light stylized delta.</em></p>
+<p align="center"><em>…the <strong>same cell, same PLC code</strong>, rendered <strong>GPU-free in a browser</strong> — the <code>hilweb</code> branch swaps Isaac Sim for a Three.js/WebSocket viewer (<code>--realbot</code> loads the real ABB CAD, shown).</em></p>
+
+<p align="center">
+  <img src="docs/hilmujoco.gif" width="760" alt="The same cell and controller on a real MuJoCo contact-physics plant">
+</p>
+
+<p align="center"><em>…and — <strong>this <code>hilmujoco</code> branch</strong> — the same cell and PLC code on a <strong>real MuJoCo contact-physics plant</strong>: the belt carries tortillas by <strong>friction</strong>, the grasp is a <strong>weld</strong>, and placed tortillas <strong>physically fall and pile</strong> in the totes. Same browser viewer, <code>--plant mujoco</code>; <code>--native</code> opens MuJoCo's own contact view.</em></p>
 
 Hardware-in-the-loop simulator for **challenging pick-and-place**: ABB **IRB 360
 Delta** robots on **NVIDIA Isaac Sim**, closed around a **real industrial PLC**,
@@ -28,10 +34,16 @@ is the regression net.
 > The controller is real, its program is unchanged from sim to bench, and the sim
 > reads the controller's own clock.
 
-> **This `hilweb` branch** keeps the plant, `cell_controller`, and TwinCAT program
+> The `hilweb` branch keeps the plant, `cell_controller`, and TwinCAT program
 > **byte-identical** and replaces *only* the renderer — Isaac Sim → a Three.js viewer
 > streamed over WebSocket — so the whole cell runs on a **laptop with no GPU** (and,
 > with `--realbot`, still shows the real ABB CAD). Controller invariant, renderer swapped.
+
+> **This `hilmujoco` branch** goes one seam deeper: it keeps `cell_controller` and the
+> TwinCAT program **byte-identical** and swaps the *plant* — the kinematic `cell_plant` for a
+> **MuJoCo** one where the belt carries tortillas by contact friction, the grasp is a weld,
+> and placed tortillas physically fall and pile in the totes. Rendered through the same
+> browser viewer (`--plant mujoco`). Controller invariant, **plant** swapped.
 
 ---
 
@@ -43,7 +55,7 @@ Everything is additive and each rung is independently useful. Start at the top
 ### 0 · Laptop — no GPU, no PLC
 
 ```bash
-pytest -q                      # 40 tests: plant, controller, velocity-match, calibration
+pytest -q                      # 45 tests: plant, controller, velocity-match, calibration, MuJoCo physics
 python -m deltahil.run         # single-robot mock HIL loop + self-scored calibration
 ```
 `pytest` proves the whole control/plant/calibration stack. `deltahil.run` closes a
@@ -55,12 +67,17 @@ The cell **in a browser, no Isaac, no GPU** — the same `cell_plant` + `cell_co
 (or a live TwinCAT PLC) streamed to a Three.js viewer over WebSocket:
 
 ```bash
-pip install -e ".[web]"
+pip install -e ".[web,mujoco]"
 python scripts/run_web_cell.py               # http://127.0.0.1:8080  (light stylized delta)
 python scripts/run_web_cell.py --realbot     # render the REAL ABB IRB 360 CAD (fetches ~3 MB glTF on demand)
 python scripts/run_web_cell.py --plc <AMS>   # driven LIVE by TwinCAT over ADS (reports round-trip)
+python scripts/run_web_cell.py --plant mujoco           # REAL MuJoCo contact physics (friction belt, weld grasp, piling)
+python scripts/run_web_cell.py --plant mujoco --native  # ...also open MuJoCo's own contact-debug window
 ```
-Two deltas over the source + tote belts, tortillas picked into totes, the **TCP-vx-vs-belt
+With `--plant mujoco` the tortillas are dragged by belt **friction** (emergent 0.220 m/s), the
+grasp is a **weld** on the same pose∧velocity gate, and placed tortillas **physically pile** in
+the moving totes — the controller can't tell the plants apart. Otherwise (default) two deltas
+over the source + tote belts, tortillas picked into totes, the **TCP-vx-vs-belt
 overlay** (bold = velocity-locked, dot at each grab), and a live HUD (placed/min, conserved,
 reach). Everything is **vendored** (Three.js + the CAD glTF) — it runs **air-gapped**;
 `--realbot` fetches the CAD only when asked, so the default stays instant.
@@ -114,11 +131,13 @@ window to **freeze** the cell live; set `VPLOT = False` for a clean beauty rende
 
 | Command | Where | Needs | What you get |
 |---|---|---|---|
-| `pytest -q` | laptop | nothing | 40 tests pass |
+| `pytest -q` | laptop | nothing | 45 tests pass (40 without the `[mujoco]` extra) |
 | `python -m deltahil.run` | laptop | nothing | mock HIL loop + eval-10 calibration self-score |
 | **`python scripts/run_web_cell.py`** | laptop | `[web]` | **GPU-free browser viewer of the cell (stylized delta)** |
 | `python scripts/run_web_cell.py --realbot` | laptop | `[web]` | …with the real ABB IRB 360 CAD (on-demand glTF) |
-| `python scripts/run_web_cell.py --plc <AMS>` | laptop | `[web]` + TwinCAT | browser viewer driven live by the PLC |
+| **`python scripts/run_web_cell.py --plant mujoco`** | laptop | `[web,mujoco]` | **real MuJoCo contact physics (friction belt, weld grasp, piling)** |
+| `python scripts/run_web_cell.py --plant mujoco --native` | laptop | `[web,mujoco]` | …also open MuJoCo's own contact-debug window |
+| `python scripts/run_web_cell.py --plc <AMS>` | laptop | `[web]` + TwinCAT | browser viewer driven live by the PLC (any `--plant`) |
 | `python scripts/run_twincat_cell.py mock [secs]` | rig | Isaac | deterministic two-robot cell → `twincat_cell.mp4/.gif` |
 | `python scripts/cell_animation.py` | rig | Isaac | scripted two-robot cell → `cell_pick.gif` |
 | `python scripts/animate_irb360.py` | rig | Isaac | one IRB 360 cycle → `irb360_pick.gif` |
@@ -201,11 +220,22 @@ axis moves at the conveyor speed, not a one-sample-lagged chased position).
 - `scripts/run_twincat_cell.py` — boots Isaac, runs the loop against the live PLC
   (or the mock), then renders. `cell_scene.py` (frozen) builds the USD; the render
   script dresses it (steel frame, belts, lighting) additively.
-- `render/web/server.py` + `static/viewer.html` — the **web render seam** (this branch):
-  runs the same plant + controller (or live TwinCAT) headless and streams ~30 Hz JSON
-  snapshots to a Three.js viewer. `--realbot` articulates the real IRB 360 CAD via a JS
-  port of `plant/irb360_pose.pose()` (`scripts/build_robot_glb.py` makes the glTF from the
-  STEP). No Isaac import on this path.
+- `render/web/server.py` + `static/viewer.html` — the **web render seam**: runs the same
+  plant + controller (or live TwinCAT) headless and streams ~30 Hz JSON snapshots to a
+  Three.js viewer. `--realbot` articulates the real IRB 360 CAD via a JS port of
+  `plant/irb360_pose.pose()` (`scripts/build_robot_glb.py` makes the glTF from the STEP).
+- `plant/mujoco_cell_plant.py` — the **MuJoCo plant seam** (this branch): the SAME public
+  contract as `cell_plant` (so `cell_controller` / `cell_link` / the ST program are unchanged),
+  backed by real contact dynamics — a frictional slide-jointed belt (conveyor idiom), a weld
+  grasp on the P3 gate, and tortillas that physically pile in the totes. `--plant mujoco`
+  renders it in the browser; `--native` opens MuJoCo's own contact view (per-part quaternion is
+  streamed so the browser shows the tumble).
+
+<p align="center">
+  <img src="docs/hilmujoco-native.png" width="620" alt="MuJoCo --native raw contact view">
+</p>
+
+<p align="center"><em><code>--plant mujoco --native</code>: MuJoCo's own contact view — the belt slab drags the tortilla cylinders by friction, the light spheres are the gripper TCPs (non-colliding ideal servos, one dipped into a tote mid-place), the open boxes are the totes.</em></p>
 
 ## The seams (drop in real hardware)
 
@@ -214,8 +244,8 @@ Both sides sit behind `interfaces.py`; nothing upstream changes when you swap th
 | Seam | Light / mock (runs now) | Full / real |
 |------|-----------------|------|
 | Controller | `plc/mock_plc.py`, `plc/cell_controller.py` | TwinCAT via `plc/twincat_plc.py` / `plc/cell_link.py` (ADS); `plc/logix_plc.py` stub for ControlLogix |
-| Plant | `plant/mock_plant.py`, `plant/cell_plant.py` | `plant/isaac_plant.py` — Isaac Sim |
-| **Render** | `render/web/` — Three.js browser viewer, no GPU (this branch) | Isaac Sim (`scripts/run_twincat_cell.py`, RTX) |
+| Plant | `plant/mock_plant.py`, `plant/cell_plant.py` (kinematic), **`plant/mujoco_cell_plant.py` (MuJoCo physics)** | `plant/isaac_plant.py` — Isaac Sim |
+| Render | `render/web/` — Three.js browser viewer, no GPU | Isaac Sim (`scripts/run_twincat_cell.py`, RTX) |
 
 ## Eval status
 
@@ -226,14 +256,20 @@ Both sides sit behind `interfaces.py`; nothing upstream changes when you swap th
 | velocity-lock at pick (P3) | laptop / rig | **matched** — grab latches only at &#124;vx−belt&#124; < 0.015 m/s |
 | 5 · <10 ms / σ<1 ms round-trip (P1, A) | your rig | **met** — cell ADS ≈ 2.0 ms, σ ≈ 0.25 ms |
 | reach envelope never violated (cell) | laptop / rig | **0 violations** in mock + live |
-| controller invariance (this branch) | laptop | **`git diff` empty** — controller/plant/ST unchanged vs master |
+| controller invariance (both branches) | laptop | **`git diff` empty** — `cell_controller`/`cell_link`/ST unchanged vs master |
 | web viewer runs GPU-free + offline | laptop | streams + renders (stylized & real CAD), no CDN |
+| MuJoCo belt carries by friction (P3, plant) | laptop | **0.220 m/s** emergent — no one scripts the motion |
+| MuJoCo grasp needs velocity coincidence (P3) | laptop | pose-only, zero-velocity contact **rejected** |
+| MuJoCo places pile + conserve (P5) | laptop | tortillas stack (z 0.354 / 0.366), **conserved every step**, 0 reach |
+| cross-backend agreement (kinematic ↔ MuJoCo) | laptop | same controller, placed count within tolerance |
 
 ## Handoff
 
-Keep `pytest` green as the regression net. This `hilweb` branch shows the point of the seam
-architecture: the renderer is a passive consumer, so **Isaac swaps out for a laptop browser
-with the controller untouched**. The next step off the twin is the bench: the **PLC program
-is unchanged**, physics and a real gripper replace the plant's grasp adjudication, and a hard
-EtherCAT fieldbus replaces the polled ADS clock — the controller keeps its logic; only its
+Keep `pytest` green as the regression net. The `hilweb` and `hilmujoco` branches show the point
+of the seam architecture: **both the renderer and the plant swap behind the controller** — Isaac
+→ a laptop browser, and the kinematic plant → real MuJoCo contact physics — with
+`cell_controller` and the ST program untouched. The next step off the twin is the bench: the
+**PLC program is unchanged**, physics and a real gripper replace the plant's grasp adjudication
+(exactly what MuJoCo is a laptop-scale rehearsal of), and a hard EtherCAT fieldbus replaces the
+polled ADS clock — the controller keeps its logic; only its
 senses swap from silicon to steel.
