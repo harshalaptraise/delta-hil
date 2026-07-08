@@ -239,7 +239,7 @@ function hud(s){
   const L=s.ledger, names=Object.keys(s.rob);
   const rl=names.map(n=>`${n.slice(-1)}:${s.grip[n]?'HOLD':' — '} vx=${s.vx[n].toFixed(2)}`).join('   ');
   document.getElementById('hud').innerHTML =
-    `<b>delta-hil cell</b>  (${SRC})   t=${s.t.toFixed(1)}s\n`+
+    `<b>delta-hil cell</b>  (${SRC})${s.rtt_ms!=null?`  ADS ${s.rtt_ms.toFixed(1)} ms`:''}   t=${s.t.toFixed(1)}s\n`+
     `${rl}\n`+
     `placed ${L.placed}  <b>${L.rate}/min</b>   picked ${L.picked}  passed ${L.passed}\n`+
     `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;

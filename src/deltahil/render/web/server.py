@@ -104,7 +104,8 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
 
     last_cmds: dict = {}
     prev = time.monotonic()
-    acc, prev_plc = 0.0, None
+    acc = 0.0
+    rtt_ms = 0.0                                     # ADS round-trip (EMA), for the readout
     try:
         while True:
             now = time.monotonic()
@@ -120,16 +121,19 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
                     def _io():                          # blocking ADS round-trip
                         link.write_sensors(sensors)
                         return link.read_commands()
-                    last_cmds, enable, plc_ns = await asyncio.to_thread(_io)
-                    rdt = ((plc_ns - prev_plc) / 1e9 if plc_ns and prev_plc else DT)
-                    rdt = min(max(rdt, 0.0), 0.05)
-                    prev_plc = plc_ns
+                    t0 = time.monotonic()
+                    last_cmds, enable, _plc_ns = await asyncio.to_thread(_io)
+                    rtt_ms = 0.9 * rtt_ms + 0.1 * (time.monotonic() - t0) * 1e3
                     plant.apply_commands(last_cmds)
-                    if enable and rdt > 0.0:
-                        plant.step(rdt)
+                    if enable:                          # advance by REAL wall time, not the PLC
+                        plant.step(DT)                  # clock delta -> vx is measured over the
+                                                        # same tick it's drawn on, and the cell
+                                                        # runs real-time (enable:=FALSE freezes it)
                 acc -= DT
             snap = snapshot(plant, DT, last_cmds)
             snap["source"] = app.get("source", "mock controller")
+            if link is not None:
+                snap["rtt_ms"] = round(rtt_ms, 2)
             await _broadcast(app, snap)
             if native is not None and native.is_running():
                 native.sync()
